@@ -10,11 +10,14 @@ import {
     Calendar,
     Users,
     FileText,
-    TrendingUp
+    TrendingUp,
+    Menu,
+    User,
+    LogOut
 } from 'lucide-react'
 import axios from 'axios'
 
-function MainContent({ selectedRepo, user }) {
+function MainContent({ selectedRepo, user, onToggleMobileSidebar, isMobileSidebarOpen }) {
     const [repoStats, setRepoStats] = useState(null)
     const [loading, setLoading] = useState(false)
 
@@ -62,31 +65,105 @@ function MainContent({ selectedRepo, user }) {
 
     if (!selectedRepo) {
         return (
-            <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 duration-200 transition-colors">
-                <div className="text-center">
-                    <GitBranch className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Welcome to DiffSense</h2>
-                    <p className="text-gray-600 dark:text-gray-400 max-w-md">
-                        Select a repository from the sidebar to view detailed analysis and insights
-                        about your code changes and development patterns.
-                    </p>
+            <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 duration-200 transition-colors">
+                {/* Mobile Header with Hamburger Menu */}
+                <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 sticky top-0 z-30">
+                    <div className="flex items-center justify-between">
+                        <button
+                            onClick={onToggleMobileSidebar}
+                            className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            title="Toggle sidebar"
+                        >
+                            <Menu className="w-6 h-6" />
+                        </button>
+                        
+                        <div className="flex items-center gap-3">
+                            <div className="bg-primary-600 p-2 rounded-lg">
+                                <GitBranch className="w-5 h-5 text-white" />
+                            </div>
+                            <h1 className="text-lg font-bold text-gray-900 dark:text-white">DiffSense</h1>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
+                                {user?.photos && user.photos[0] ? (
+                                    <img
+                                        src={user.photos[0].value}
+                                        alt={user.displayName || user.username}
+                                        className="w-8 h-8 rounded-full"
+                                    />
+                                ) : (
+                                    <User className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Welcome Content */}
+                <div className="flex-1 flex items-center justify-center p-4">
+                    <div className="text-center">
+                        <GitBranch className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Welcome to DiffSense</h2>
+                        <p className="text-gray-600 dark:text-gray-400 max-w-md">
+                            Select a repository from the sidebar to view detailed analysis and insights
+                            about your code changes and development patterns.
+                        </p>
+                    </div>
                 </div>
             </div>
         )
     }
     return (
-        <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900 duration-200 transition-colors">
-            <div className="p-6">
-                {/* Repository Header */}
-                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 mb-6">
-                    <div className="flex items-start justify-between mb-4">
-                        <div>
-                            <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+        <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 duration-200 transition-colors">
+            {/* Mobile Header with Hamburger Menu */}
+            <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 sticky top-0 z-30">
+                <div className="flex items-center justify-between">
+                    <button
+                        onClick={onToggleMobileSidebar}
+                        className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                        title="Toggle sidebar"
+                    >
+                        <Menu className="w-6 h-6" />
+                    </button>
+                    
+                    <div className="flex items-center gap-3">
+                        <div className="bg-primary-600 p-2 rounded-lg">
+                            <GitBranch className="w-5 h-5 text-white" />
+                        </div>
+                        <h1 className="text-lg font-bold text-gray-900 dark:text-white">DiffSense</h1>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
+                            {user?.photos && user.photos[0] ? (
+                                <img
+                                    src={user.photos[0].value}
+                                    alt={user.displayName || user.username}
+                                    className="w-8 h-8 rounded-full"
+                                />
+                            ) : (
+                                <User className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Main Content */}
+            <div className="flex-1 overflow-y-auto">
+                <div className="p-4 sm:p-6">
+                    {/* Repository Header */}
+                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 sm:p-6 mb-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-4 gap-4">
+                        <div className="flex-1">
+                            <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2">
                                 {selectedRepo.name}
                             </h1>
                             <p className="text-gray-600 dark:text-gray-300 mb-4">
                                 {selectedRepo.description || 'No description available'}
-                            </p>              <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-300">
+                            </p>
+                            <div className="flex flex-wrap items-center gap-4 text-sm text-gray-600 dark:text-gray-300">
                                 <div className="flex items-center gap-1">
                                     <Users className="w-4 h-4" />
                                     <span>{selectedRepo.owner.login}</span>
@@ -105,7 +182,7 @@ function MainContent({ selectedRepo, user }) {
                             href={selectedRepo.html_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm font-medium"
+                            className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors text-sm font-medium whitespace-nowrap"
                         >
                             <ExternalLink className="w-4 h-4" />
                             View on GitHub
@@ -113,7 +190,7 @@ function MainContent({ selectedRepo, user }) {
                     </div>
 
                     {/* Repository Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                             <div className="flex items-center gap-2 mb-1">
                                 <Star className="w-4 h-4 text-yellow-500" />
@@ -236,6 +313,7 @@ function MainContent({ selectedRepo, user }) {
                         </div>
                     </div>
                 )}
+                </div>
             </div>
         </div>
     )
