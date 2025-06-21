@@ -15,6 +15,7 @@ function Dashboard({ user, onLogout }) {
         return saved ? JSON.parse(saved) : []
     })
     const [searchQuery, setSearchQuery] = useState('')
+    const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 
     useEffect(() => {
         localStorage.setItem('diffsense-favorites', JSON.stringify(favorites))
@@ -38,6 +39,7 @@ function Dashboard({ user, onLogout }) {
 
     const handleSelectRepo = (repo) => {
         setSelectedRepo(repo)
+        setIsMobileSidebarOpen(false) // Close mobile sidebar when repo is selected
 
         // Update recently viewed list
         setRecentlyViewed(prev => {
@@ -109,25 +111,48 @@ function Dashboard({ user, onLogout }) {
     })
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors">
-            <Sidebar
-                repositories={sortedRepositories}
-                selectedRepo={selectedRepo}
-                onSelectRepo={handleSelectRepo}
-                onAddRepository={handleAddRepository}
-                onRemoveRepository={handleRemoveRepository}
-                favorites={favorites}
-                onToggleFavorite={toggleFavorite}
-                searchQuery={searchQuery}
-                onSearchChange={setSearchQuery}
-                user={user}
-                onLogout={onLogout}
-                setRepositories={setRepositories}
-            />
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative">
+            {/* Mobile sidebar overlay */}
+            {isMobileSidebarOpen && (
+                <div 
+                    className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+                    onClick={() => setIsMobileSidebarOpen(false)}
+                />
+            )}
 
-            <MainContent
-                selectedRepo={selectedRepo} user={user}
-            />
+            {/* Sidebar - Hidden on mobile by default, slides in when open */}
+            <div className={`
+                fixed lg:relative lg:translate-x-0 z-50 lg:z-auto
+                transform transition-transform duration-300 ease-in-out
+                ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
+                lg:flex lg:flex-shrink-0
+            `}>
+                <Sidebar
+                    repositories={sortedRepositories}
+                    selectedRepo={selectedRepo}
+                    onSelectRepo={handleSelectRepo}
+                    onAddRepository={handleAddRepository}
+                    onRemoveRepository={handleRemoveRepository}
+                    favorites={favorites}
+                    onToggleFavorite={toggleFavorite}
+                    searchQuery={searchQuery}
+                    onSearchChange={setSearchQuery}
+                    user={user}
+                    onLogout={onLogout}
+                    setRepositories={setRepositories}
+                    onCloseMobileSidebar={() => setIsMobileSidebarOpen(false)}
+                />
+            </div>
+
+            {/* Main content area */}
+            <div className="flex-1 flex flex-col min-w-0">
+                <MainContent
+                    selectedRepo={selectedRepo}
+                    user={user}
+                    onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+                    isMobileSidebarOpen={isMobileSidebarOpen}
+                />
+            </div>
         </div>
     )
 }

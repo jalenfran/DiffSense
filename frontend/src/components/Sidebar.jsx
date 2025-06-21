@@ -15,7 +15,8 @@ function Sidebar({
     onSearchChange,
     user,
     onLogout,
-    setRepositories
+    setRepositories,
+    onCloseMobileSidebar
 }) {
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
     const [showAddDialog, setShowAddDialog] = useState(false)
@@ -120,10 +121,10 @@ function Sidebar({
     }
 
     return (
-        <div className="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 h-screen flex flex-col duration-200 transition-colors">
+        <div className="w-80 sm:w-72 lg:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 h-screen flex flex-col duration-200 transition-colors">
             {/* Header Section */}
             <div className="p-4 border-b border-gray-200 dark:border-gray-700 duration-200 transition-colors">
-                {/* Logo */}
+                {/* Logo and Controls */}
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                         <div className="bg-primary-600 p-2 rounded-lg">
@@ -131,13 +132,25 @@ function Sidebar({
                         </div>
                         <h1 className="text-xl font-bold text-gray-900 dark:text-white">DiffSense</h1>
                     </div>
-                    <button
-                        onClick={toggleDarkMode}
-                        className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                        title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-                    >
-                        {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={toggleDarkMode}
+                            className="text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                            title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+                        >
+                            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+                        </button>
+                        {/* Mobile close button */}
+                        {onCloseMobileSidebar && (
+                            <button
+                                onClick={onCloseMobileSidebar}
+                                className="lg:hidden text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200 p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                                title="Close sidebar"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        )}
+                    </div>
                 </div>                {/* User Info */}
                 <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg mb-4">
                     <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
@@ -276,7 +289,7 @@ function Sidebar({
                 </p>
             </div>      {/* Add Repository Dialog */}
             {showAddDialog && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-black dark:bg-opacity-70 flex items-center justify-center z-50 p-4">
+                <div className="fixed inset-0 bg-black bg-opacity-50 dark:bg-black dark:bg-opacity-70 flex items-center justify-center z-50 p-4" style={{ width: "100vw" }}>
                     <div className="bg-white dark:bg-gray-800 rounded-lg w-[600px] max-w-full h-[600px] max-h-[90vh] flex flex-col">
                         {/* Dialog Header */}
                         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
