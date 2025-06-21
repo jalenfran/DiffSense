@@ -3,33 +3,44 @@
 @tailwind utilities;
 
 @layer base {
-  body {
-    @apply bg-gray-50 text-gray-900;
-  }
+    body {
+        @apply bg-gray-50 text-gray-900;
+    }
+
+    /* Synchronize dark mode transitions */
+    html.dark * {
+        transition-duration: 200ms;
+        transition-timing-function: ease-in-out;
+    }
+
+    /* Disable transitions during theme change */
+    html[style*="--disable-transitions"] * {
+        transition: none !important;
+    }
 }
 
 @layer components {
-  .card {
-    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
-  }
-  
-  .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200;
-  }
-  
-  .btn-secondary {
-    @apply bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium py-2 px-4 rounded-md transition-colors duration-200;
-  }
-  
-  .drift-badge-low {
-    @apply bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded;
-  }
-  
-  .drift-badge-medium {
-    @apply bg-yellow-100 text-yellow-800 text-xs font-medium px-2.5 py-0.5 rounded;
-  }
-  
-  .drift-badge-high {
-    @apply bg-red-100 text-red-800 text-xs font-medium px-2.5 py-0.5 rounded;
-  }
+    .btn-primary {
+        @apply bg-primary-600 hover:bg-primary-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+    }
+
+    .btn-secondary {
+        @apply bg-gray-200 hover:bg-gray-300 text-gray-900 font-medium py-2 px-4 rounded-lg transition-colors duration-200;
+    }
+
+    .card {
+        @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+    }
+
+    .sidebar-item {
+        @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200;
+    }
+
+    .sidebar-item-active {
+        @apply bg-primary-100 text-primary-700;
+    }
+
+    .sidebar-item-inactive {
+        @apply text-gray-600 hover:bg-gray-100 hover:text-gray-900;
+    }
 }
