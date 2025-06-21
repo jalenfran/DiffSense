@@ -1,12 +1,21 @@
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModel
 import torch
 from sklearn.metrics.pairwise import cosine_similarity
 from dataclasses import dataclass
 import json
 import hashlib
+import os
+from dotenv import load_dotenv
+import logging
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @dataclass
 class EmbeddingResult:
@@ -17,31 +26,56 @@ class EmbeddingResult:
     metadata: Dict[str, Any]
 
 class CodeEmbedder:
-    """Generate embeddings for code changes using CodeBERT"""
+    """Generate embeddings for code changes using CodeBERT or fallback"""
     
-    def __init__(self, model_name: str = "microsoft/codebert-base"):
-        self.model_name = model_name
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
-        self.model.eval()
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or os.getenv('CODE_MODEL', 'microsoft/codebert-base')
+        self.tokenizer = None
+        self.model = None
+        self.use_transformers = True
+        
+        try:
+            from transformers import AutoTokenizer, AutoModel
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModel.from_pretrained(self.model_name)
+            self.model.eval()
+            logger.info(f"Successfully loaded CodeBERT model: {self.model_name}")
+        except Exception as e:
+            logger.warning(f"Failed to load transformers model {self.model_name}: {str(e)}")
+            logger.info("Falling back to sentence-transformers for code embedding")
+            self.use_transformers = False
+            # Fallback to sentence transformers
+            try:
+                self.sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+            except Exception as e2:
+                logger.error(f"Failed to load fallback model: {str(e2)}")
+                raise RuntimeError("Unable to load any embedding model")
     
     def embed_code(self, code: str, max_length: int = 512) -> np.ndarray:
         """Generate embedding for code snippet"""
-        # Tokenize and truncate
-        inputs = self.tokenizer(
-            code, 
-            return_tensors="pt", 
-            max_length=max_length, 
-            truncation=True, 
-            padding=True
-        )
+        if self.use_transformers and self.tokenizer and self.model:
+            try:
+                # Tokenize and truncate
+                inputs = self.tokenizer(
+                    code, 
+                    return_tensors="pt", 
+                    max_length=max_length, 
+                    truncation=True, 
+                    padding=True
+                )
+                
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # Use mean pooling of last hidden states
+                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                
+                return embedding
+            except Exception as e:
+                logger.warning(f"CodeBERT embedding failed: {str(e)}, falling back to sentence transformer")
+                self.use_transformers = False
         
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            # Use mean pooling of last hidden states
-            embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-        
-        return embedding
+        # Fallback to sentence transformers
+        return self.sentence_model.encode(code)
     
     def embed_diff(self, added_lines: List[str], removed_lines: List[str]) -> np.ndarray:
         """Generate embedding for a code diff"""
@@ -54,16 +88,35 @@ class CodeEmbedder:
         if added_lines:
             diff_text += "[ADDED] " + "\n".join(added_lines)
         
+        if not diff_text.strip():
+            diff_text = "[EMPTY_DIFF]"
+            
         return self.embed_code(diff_text)
 
 class TextEmbedder:
     """Generate embeddings for commit messages and text using sentence transformers"""
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+    def __init__(self, model_name: str = None):
+        if model_name is None:
+            model_name = os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2')
+        
+        try:
+            self.model = SentenceTransformer(model_name)
+            logger.info(f"Successfully loaded text embedding model: {model_name}")
+        except Exception as e:
+            logger.error(f"Failed to load text embedding model {model_name}: {str(e)}")
+            # Try fallback model
+            try:
+                self.model = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("Using fallback text embedding model: all-MiniLM-L6-v2")
+            except Exception as e2:
+                logger.error(f"Failed to load fallback text model: {str(e2)}")
+                raise RuntimeError("Unable to load any text embedding model")
     
     def embed_text(self, text: str) -> np.ndarray:
         """Generate embedding for text"""
+        if not text.strip():
+            text = "[EMPTY_TEXT]"
         return self.model.encode([text])[0]
     
     def embed_commit_message(self, message: str) -> np.ndarray:
@@ -74,6 +127,9 @@ class TextEmbedder:
     
     def _clean_commit_message(self, message: str) -> str:
         """Clean and normalize commit message"""
+        if not message.strip():
+            return "[EMPTY_MESSAGE]"
+            
         # Remove common prefixes and normalize
         lines = message.split('\n')
         first_line = lines[0].strip()
@@ -85,7 +141,7 @@ class TextEmbedder:
                 first_line = first_line[len(prefix):].strip()
                 break
         
-        return first_line
+        return first_line or "[EMPTY_MESSAGE]"
 
 class SemanticAnalyzer:
     """Analyze semantic drift and similarity between code changes"""
@@ -154,8 +210,11 @@ class SemanticAnalyzer:
     
     def detect_significant_changes(self, 
                                  embeddings: List[EmbeddingResult], 
-                                 threshold: float = 0.3) -> List[int]:
+                                 threshold: float = None) -> List[int]:
         """Detect indices of commits with significant semantic changes"""
+        if threshold is None:
+            threshold = float(os.getenv('SEMANTIC_SIMILARITY_THRESHOLD', '0.3'))
+        
         if len(embeddings) < 2:
             return []
         

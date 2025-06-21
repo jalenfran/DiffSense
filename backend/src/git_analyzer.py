@@ -29,12 +29,14 @@ class GitAnalyzer:
     @classmethod
     def clone_repository(cls, repo_url: str, local_path: str) -> 'GitAnalyzer':
         """Clone a repository and return GitAnalyzer instance"""
-        if os.path.exists(local_path):
-            # If repo already exists, just open it
+        try:
+            print(f"Cloning {repo_url} to {local_path}")
+            git.Repo.clone_from(repo_url, local_path)
+            print(f"Successfully cloned repository")
             return cls(local_path)
-        
-        git.Repo.clone_from(repo_url, local_path)
-        return cls(local_path)
+        except Exception as e:
+            print(f"Failed to clone repository: {e}")
+            raise
     
     def get_commits_for_file(self, file_path: str, max_commits: int = 100) -> List[git.Commit]:
         """Get commits that modified a specific file"""
@@ -168,8 +170,8 @@ class GitAnalyzer:
             'total_commits': len(commits),
             'contributors': len(set(commit.author.name for commit in commits)),
             'date_range': {
-                'first_commit': datetime.fromtimestamp(commits[-1].committed_date).isoformat() if commits else None,
-                'last_commit': datetime.fromtimestamp(commits[0].committed_date).isoformat() if commits else None
+                'start': datetime.fromtimestamp(commits[-1].committed_date).isoformat() if commits else None,
+                'end': datetime.fromtimestamp(commits[0].committed_date).isoformat() if commits else None
             },
             'active_branches': len(list(self.repo.branches)),
             'file_count': len(list(self.repo.tree().traverse()))
