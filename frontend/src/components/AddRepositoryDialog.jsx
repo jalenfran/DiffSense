@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { Search, Star, Lock, Globe, Plus, X, Loader2 } from 'lucide-react'
-import axios from 'axios'
 import { diffSenseAPI } from '../services/api'
 
 function AddRepositoryDialog({ 
@@ -18,13 +17,11 @@ function AddRepositoryDialog({
 
     // Filter available repos for the dialog
     const filteredAvailableRepos = availableRepos.filter(repo => {
-        const alreadyAdded = repositories.some(addedRepo => addedRepo.id === repo.id)
+        const alreadyAdded = repositories.some(addedRepo => addedRepo.full_name === repo.full_name)
         const matchesSearch = repo.name.toLowerCase().includes(repoSearchQuery.toLowerCase()) ||
             repo.full_name.toLowerCase().includes(repoSearchQuery.toLowerCase())
         return !alreadyAdded && matchesSearch
-    })
-
-    // Fetch user's repositories when dialog opens
+    })    // Fetch user's repositories when dialog opens
     useEffect(() => {
         if (isOpen && addMethod === 'browse' && availableRepos.length === 0) {
             fetchAvailableRepositories()
@@ -34,25 +31,14 @@ function AddRepositoryDialog({
     const fetchAvailableRepositories = async () => {
         setLoadingRepos(true)
         try {
-            const response = await axios.get('/auth/repositories', {
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            })
-            
-            if (response.data && Array.isArray(response.data)) {
-                setAvailableRepos(response.data)
-            } else {
-                console.error('Invalid repositories response:', response.data)
-                // Fallback - set empty array so user can still add by URL
-                setAvailableRepos([])
-            }
+            const repos = await diffSenseAPI.getGitHubRepositories()
+            setAvailableRepos(repos)
         } catch (error) {
             console.error('Error fetching repositories:', error)
-            // Fallback - set empty array so user can still add by URL
             setAvailableRepos([])
         } finally {
-            setLoadingRepos(false)        }
+            setLoadingRepos(false)
+        }
     }
 
     const handleAddRepository = async (repoData = null) => {
@@ -61,14 +47,13 @@ function AddRepositoryDialog({
         setIsLoading(true)
 
         try {
-            let repoUrl
             let owner, repoName
 
             if (repoData) {
                 // Adding from browse list
-                owner = repoData.owner.login
-                repoName = repoData.name
-                repoUrl = repoData.clone_url || repoData.html_url
+                const [ownerName, repoNameFromFull] = repoData.full_name.split('/')
+                owner = ownerName
+                repoName = repoNameFromFull
             } else {
                 // Adding from URL
                 if (!newRepoUrl.trim()) {
@@ -84,16 +69,13 @@ function AddRepositoryDialog({
 
                 [, owner, repoName] = match
                 repoName = repoName.replace('.git', '')
-                repoUrl = newRepoUrl
             }
 
             // Call the actual API to add the repository
-            await onAddRepository(owner, repoName)
+            await onAddRepository(owner, repoName, repoData)
 
             // Close dialog and reset form
-            onClose()
-            setRepoSearchQuery('')
-            setNewRepoUrl('')
+            handleClose()
         } catch (error) {
             console.error('Error adding repository:', error)
             alert(error.message || 'Failed to add repository')
@@ -164,7 +146,9 @@ function AddRepositoryDialog({
                                         className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
                                     />
                                 </div>
-                            </div>                            {/* Repository List */}
+                            </div>
+                            
+                            {/* Repository List */}
                             <div className="flex-1 overflow-y-auto px-6 pb-6">
                                 {loadingRepos ? (
                                     <div className="flex items-center justify-center py-8">
@@ -224,8 +208,8 @@ function AddRepositoryDialog({
                                 ) : (
                                     <div className="text-center py-8">
                                         <div className="text-gray-500 dark:text-gray-400">
-                                            <p className="mb-2">Browse functionality is currently unavailable.</p>
-                                            <p className="text-sm">Please use "Add by URL" to add repositories.</p>
+                                            <p className="mb-2">{repoSearchQuery ? 'No repositories match your search.' : 'No repositories available to add.'}</p>
+                                            <p className="text-sm">{repoSearchQuery ? 'Try a different search term.' : 'All your repositories may already be added, or you may need to authenticate with GitHub.'}</p>
                                         </div>
                                     </div>
                                 )}

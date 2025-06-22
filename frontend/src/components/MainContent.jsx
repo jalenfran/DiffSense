@@ -22,18 +22,18 @@ import ChatInterface from './ChatInterface'
 import { useRepository } from '../contexts/RepositoryContext'
 
 function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
-    const { 
-        selectedRepo, 
-        repoStats, 
-        repoFiles, 
-        riskDashboard, 
+    const {
+        selectedRepo,
+        repoStats,
+        repoFiles,
+        riskDashboard,
         isLoading,
         error,
         messages,
         selectedFiles,
         isChatLoading,
         sendChatMessage,
-        setSelectedFiles    } = useRepository()
+        setSelectedFiles } = useRepository()
 
     // Chat maximize state
     const [isChatMaximized, setIsChatMaximized] = useState(false)
@@ -88,7 +88,8 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
         return colors[language] || 'bg-gray-400'
     }
 
-    if (!selectedRepo) {        return (
+    if (!selectedRepo) {
+        return (
             <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 duration-200 transition-colors h-full overflow-hidden">
                 {/* Mobile Header with Hamburger Menu */}
                 <div className="lg:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 sticky top-0 z-30">
@@ -100,7 +101,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                         >
                             <Menu className="w-6 h-6" />
                         </button>
-                        
+
                         <div className="flex items-center gap-3">
                             <div className="bg-primary-600 p-2 rounded-lg">
                                 <GitBranch className="w-5 h-5 text-white" />
@@ -110,10 +111,10 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
 
                         <div className="flex items-center gap-2">
                             <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
-                                {user?.photos && user.photos[0] ? (
+                                {user?.github_avatar ? (
                                     <img
-                                        src={user.photos[0].value}
-                                        alt={user.displayName || user.username}
+                                        src={user.github_avatar}
+                                        alt={user.display_name || user.github_username}
                                         className="w-8 h-8 rounded-full"
                                     />
                                 ) : (
@@ -135,12 +136,12 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                         </p>
                     </div>
                 </div>
-            </div>        )
+            </div>)
     }
     return (
         <div className="flex-1 flex flex-col bg-gray-50 dark:bg-gray-900 duration-200 transition-colors relative h-full overflow-hidden">            {/* Chat Backdrop */}
             {isChatMaximized && (
-                <div 
+                <div
                     className="fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity duration-300"
                     onClick={handleToggleChatMaximize}
                 />
@@ -156,7 +157,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                     >
                         <Menu className="w-6 h-6" />
                     </button>
-                    
+
                     <div className="flex items-center gap-3">
                         <div className="bg-primary-600 p-2 rounded-lg">
                             <GitBranch className="w-5 h-5 text-white" />
@@ -166,10 +167,10 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
 
                     <div className="flex items-center gap-2">
                         <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
-                            {user?.photos && user.photos[0] ? (
+                            {user?.github_avatar ? (
                                 <img
-                                    src={user.photos[0].value}
-                                    alt={user.displayName || user.username}
+                                    src={user.github_avatar}
+                                    alt={user.display_name || user.github_username}
                                     className="w-8 h-8 rounded-full"
                                 />
                             ) : (
@@ -185,8 +186,8 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4 sm:p-6 mb-6">
                         <div className="flex flex-col sm:flex-row sm:items-start justify-between mb-4 gap-4">
                             <div className="flex-1">                                <h1 className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white mb-2">
-                                    {selectedRepo.name}
-                                </h1>
+                                {selectedRepo.name}
+                            </h1>
                                 {!isUrlAddedRepo && selectedRepo.description && (
                                     <p className="text-gray-600 dark:text-gray-300 mb-4">
                                         {selectedRepo.description}
@@ -298,7 +299,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
                                     <span className="text-blue-700 dark:text-blue-300">Analyzing repository...</span>
                                 </div>
-                            </div>                        )}
+                            </div>)}
                     </div>
 
                     {/* Chat Interface */}
@@ -325,7 +326,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                     <Shield className="w-5 h-5 text-red-500" />
                                     Risk Analysis Overview
                                 </h2>
-                                
+
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                                         <div className="flex items-center gap-2 mb-2">
@@ -334,11 +335,10 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                         </div>
                                         <div className="flex items-center gap-2">
                                             <div className="w-20 bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                                                <div 
-                                                    className={`h-2 rounded-full ${
-                                                        riskDashboard.overall_risk_score > 0.7 ? 'bg-red-500' : 
-                                                        riskDashboard.overall_risk_score > 0.4 ? 'bg-yellow-500' : 'bg-green-500'
-                                                    }`}
+                                                <div
+                                                    className={`h-2 rounded-full ${riskDashboard.overall_risk_score > 0.7 ? 'bg-red-500' :
+                                                            riskDashboard.overall_risk_score > 0.4 ? 'bg-yellow-500' : 'bg-green-500'
+                                                        }`}
                                                     style={{ width: `${Math.max(riskDashboard.overall_risk_score * 100, 2)}%` }}
                                                 />
                                             </div>
@@ -352,8 +352,8 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Elevated Risk Commits</span>
                                         </div>
                                         <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                                            {riskDashboard.risk_trend ? 
-                                                riskDashboard.risk_trend.filter(commit => commit.risk_score > 0.25).length : 
+                                            {riskDashboard.risk_trend ?
+                                                riskDashboard.risk_trend.filter(commit => commit.risk_score > 0.25).length :
                                                 (riskDashboard.high_risk_commits || 0)
                                             }
                                         </p>
@@ -384,7 +384,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                             const mediumRisk = commits.filter(c => c.risk_score >= 0.2 && c.risk_score < 0.5).length;
                                             const highRisk = commits.filter(c => c.risk_score >= 0.5 && c.risk_score < 0.8).length;
                                             const criticalRisk = commits.filter(c => c.risk_score >= 0.8).length;
-                                            
+
                                             return (
                                                 <>
                                                     <div className="text-center p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
@@ -423,33 +423,32 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                     </h3>
                                     <div className="space-y-3">
                                         {Object.entries(riskDashboard.most_risky_files)
-                                            .sort(([,a], [,b]) => b - a)
+                                            .sort(([, a], [, b]) => b - a)
                                             .slice(0, 10)
                                             .map(([filePath, riskScore]) => (
-                                            <div key={filePath} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                                                <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-mono text-gray-900 dark:text-white truncate" title={filePath}>
-                                                        {filePath}
-                                                    </p>
-                                                </div>
-                                                <div className="flex items-center gap-3 ml-4">
-                                                    <div className="w-24 bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                                                        <div 
-                                                            className={`h-2 rounded-full ${
-                                                                riskScore > 2 ? 'bg-red-500' : 
-                                                                riskScore > 1 ? 'bg-yellow-500' : 'bg-green-500'
-                                                            }`}
-                                                            style={{ width: `${Math.min((riskScore / 5) * 100, 100)}%` }}
-                                                        />
+                                                <div key={filePath} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="text-sm font-mono text-gray-900 dark:text-white truncate" title={filePath}>
+                                                            {filePath}
+                                                        </p>
                                                     </div>
-                                                    <span className="text-sm font-medium text-gray-900 dark:text-white w-12 text-right">
-                                                        {riskScore.toFixed(2)}
-                                                    </span>
+                                                    <div className="flex items-center gap-3 ml-4">
+                                                        <div className="w-24 bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+                                                            <div
+                                                                className={`h-2 rounded-full ${riskScore > 2 ? 'bg-red-500' :
+                                                                        riskScore > 1 ? 'bg-yellow-500' : 'bg-green-500'
+                                                                    }`}
+                                                                style={{ width: `${Math.min((riskScore / 5) * 100, 100)}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="text-sm font-medium text-gray-900 dark:text-white w-12 text-right">
+                                                            {riskScore.toFixed(2)}
+                                                        </span>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        ))}
+                                            ))}
                                     </div>
-                                </div>                            )}
+                                </div>)}
 
                             {/* Risk Insights */}
                             {riskDashboard.risk_trend && riskDashboard.risk_trend.length > 0 && (
@@ -466,7 +465,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                             const maxRiskCommit = commits.find(c => c.risk_score === maxRisk);
                                             const recentCommits = commits.slice(0, 5);
                                             const avgRecentRisk = recentCommits.reduce((sum, c) => sum + c.risk_score, 0) / recentCommits.length;
-                                            
+
                                             return (
                                                 <>
                                                     <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
@@ -481,7 +480,7 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                                             Across {commits.length} commits
                                                         </div>
                                                     </div>
-                                                    
+
                                                     <div className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-lg border border-orange-200 dark:border-orange-800">
                                                         <div className="flex items-center gap-2 mb-2">
                                                             <AlertTriangle className="w-4 h-4 text-orange-500" />
@@ -516,16 +515,15 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                                         {commit.commit_hash}
                                                     </span>
                                                     <span className="text-xs text-gray-600 dark:text-gray-300">
-                                                        {new Date(commit.timestamp).toLocaleDateString()} {new Date(commit.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                                        {new Date(commit.timestamp).toLocaleDateString()} {new Date(commit.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                                     </span>
                                                 </div>
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-20 bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                                                        <div 
-                                                            className={`h-2 rounded-full ${
-                                                                commit.risk_score > 0.7 ? 'bg-red-500' : 
-                                                                commit.risk_score > 0.4 ? 'bg-yellow-500' : 'bg-green-500'
-                                                            }`}
+                                                        <div
+                                                            className={`h-2 rounded-full ${commit.risk_score > 0.7 ? 'bg-red-500' :
+                                                                    commit.risk_score > 0.4 ? 'bg-yellow-500' : 'bg-green-500'
+                                                                }`}
                                                             style={{ width: `${Math.max(commit.risk_score * 100, 2)}%` }}
                                                         />
                                                     </div>
@@ -570,33 +568,31 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                             .sort((a, b) => b.risk_score - a.risk_score)
                                             .slice(0, 10)
                                             .map((commit, index) => (
-                                            <div key={commit.commit_hash || index} className={`p-3 rounded-lg border ${
-                                                commit.risk_score > 0.5 ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' :
-                                                'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
-                                            }`}>
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <span className="text-sm font-mono text-gray-900 dark:text-white">
-                                                        {commit.commit_hash}
-                                                    </span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-sm font-bold ${
-                                                            commit.risk_score > 0.5 ? 'text-red-600 dark:text-red-400' :
-                                                            'text-yellow-600 dark:text-yellow-400'
-                                                        }`}>
-                                                            {Math.round(commit.risk_score * 100)}% Risk
+                                                <div key={commit.commit_hash || index} className={`p-3 rounded-lg border ${commit.risk_score > 0.5 ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' :
+                                                        'bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800'
+                                                    }`}>
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <span className="text-sm font-mono text-gray-900 dark:text-white">
+                                                            {commit.commit_hash}
                                                         </span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-sm font-bold ${commit.risk_score > 0.5 ? 'text-red-600 dark:text-red-400' :
+                                                                    'text-yellow-600 dark:text-yellow-400'
+                                                                }`}>
+                                                                {Math.round(commit.risk_score * 100)}% Risk
+                                                            </span>
+                                                        </div>
                                                     </div>
+                                                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                                                        {new Date(commit.timestamp).toLocaleDateString()} {new Date(commit.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </div>
+                                                    {commit.message && (
+                                                        <p className="text-sm text-gray-600 dark:text-gray-300 mt-2 truncate">
+                                                            {commit.message}
+                                                        </p>
+                                                    )}
                                                 </div>
-                                                <div className="text-xs text-gray-500 dark:text-gray-400">
-                                                    {new Date(commit.timestamp).toLocaleDateString()} {new Date(commit.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                                </div>
-                                                {commit.message && (
-                                                    <p className="text-sm text-gray-600 dark:text-gray-300 mt-2 truncate">
-                                                        {commit.message}
-                                                    </p>
-                                                )}
-                                            </div>
-                                        ))}
+                                            ))}
                                     </div>
                                 </div>
                             )}
@@ -629,21 +625,21 @@ function MainContent({ user, onToggleMobileSidebar, isMobileSidebarOpen }) {
                                     </div>
                                 </div>
                             )}                            {/* Empty State */}
-                            {(!riskDashboard.risk_trend || riskDashboard.risk_trend.length === 0) && 
-                             (!riskDashboard.most_risky_files || Object.keys(riskDashboard.most_risky_files).length === 0) && 
-                             (!riskDashboard.breaking_changes_by_type || Object.keys(riskDashboard.breaking_changes_by_type).length === 0) &&
-                             (!riskDashboard.recent_high_risk_commits || riskDashboard.recent_high_risk_commits.length === 0) && (
-                                <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8">
-                                    <div className="text-center">
-                                        <Shield className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-3" />
-                                        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                                            No Risk Data Available
-                                        </h3>
-                                        <p className="text-gray-600 dark:text-gray-400">
-                                            Repository analysis is still in progress or no commits have been analyzed yet.
-                                        </p>
-                                    </div>
-                                </div>                            )}
+                            {(!riskDashboard.risk_trend || riskDashboard.risk_trend.length === 0) &&
+                                (!riskDashboard.most_risky_files || Object.keys(riskDashboard.most_risky_files).length === 0) &&
+                                (!riskDashboard.breaking_changes_by_type || Object.keys(riskDashboard.breaking_changes_by_type).length === 0) &&
+                                (!riskDashboard.recent_high_risk_commits || riskDashboard.recent_high_risk_commits.length === 0) && (
+                                    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-8">
+                                        <div className="text-center">
+                                            <Shield className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-3" />
+                                            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                                                No Risk Data Available
+                                            </h3>
+                                            <p className="text-gray-600 dark:text-gray-400">
+                                                Repository analysis is still in progress or no commits have been analyzed yet.
+                                            </p>
+                                        </div>
+                                    </div>)}
                         </div>
                     )}
                 </div>

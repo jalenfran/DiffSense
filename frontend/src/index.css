@@ -26,7 +26,9 @@
 
     .btn-secondary {
         @apply bg-gray-200 hover:bg-gray-300 text-gray-900 font-medium py-2 px-4 rounded-lg transition-colors duration-200;
-    }    .card {
+    }
+
+    .card {
         @apply bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6;
     }
 

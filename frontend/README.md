@@ -106,7 +106,7 @@ The API base URL and other settings can be configured in `src/config/index.js`:
 ```javascript
 export const config = {
   API_BASE_URL: 'http://76.125.217.28:8080/api',
-  API_TIMEOUT: 30000,
+  API_TIMEOUT: 120000,
   DEFAULT_MAX_COMMITS: 50,
   DEFAULT_MAX_RESULTS: 10
 }
