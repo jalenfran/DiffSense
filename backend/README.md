@@ -1,8 +1,20 @@
 # 🚀 DiffSense Backend
 
-A comprehensive semantic code analysis engine that detects breaking changes, analyzes repository drift, and provides intelligent insights using AI.
+A comprehensive semantic code analysis engine that detects breaking changes, analyzes repository drift, and provides intelligent insights using AI. Now with **user authentication** and **persistent chat conversations**!
 
 ## ✨ Features
+
+### 🔐 **User Authentication & Session Management**
+- **GitHub OAuth integration** for seamless login
+- **Private repository support** using user access tokens
+- **Persistent user sessions** with secure token management
+- **User-specific repository management**
+
+### 💬 **Intelligent Chat System**
+- **Multi-conversation support** with persistent chat history
+- **Repository-specific conversations** with full context
+- **Claude AI integration** for smart code analysis
+- **Chat archiving and management**
 
 ### 🔍 **Breaking Change Detection**
 - **Multi-language AST analysis** (Python, JavaScript, TypeScript, Java, Go, Rust)
@@ -32,9 +44,20 @@ chmod +x setup.sh
 ```
 
 ### 2. Configure Environment
+Copy the example environment file and configure:
+```bash
+cp .env.example .env
+```
+
 Edit `.env` file and add your API keys:
 ```bash
-ANTHROPIC_API_KEY=sk-ant-api-xxxxxxxxxxxxxxxxxxxx
+# Claude AI Configuration
+CLAUDE_API_KEY=your_claude_api_key_here
+
+# GitHub OAuth Configuration (for private repos)
+GITHUB_CLIENT_ID=your_github_client_id_here
+GITHUB_CLIENT_SECRET=your_github_client_secret_here
+GITHUB_REDIRECT_URI=http://localhost:3001/auth/callback
 ```
 
 ### 3. Start Server
@@ -48,7 +71,48 @@ cd ..
 ./quick_test.sh
 ```
 
+## 🔐 **Authentication Setup**
+
+To enable GitHub OAuth and private repository support:
+
+1. **Create GitHub OAuth App**:
+   - Go to GitHub Settings > Developer settings > OAuth Apps
+   - Create a new OAuth App
+   - Set Authorization callback URL to: `http://localhost:3001/auth/callback`
+
+2. **Configure Environment**:
+   ```bash
+   GITHUB_CLIENT_ID=your_client_id
+   GITHUB_CLIENT_SECRET=your_client_secret
+   ```
+
+3. **Test Authentication**:
+   ```bash
+   curl http://localhost:8000/api/auth/github
+   ```
+
 ## 📡 **API Endpoints**
+
+### 🔐 **Authentication**
+- `GET /api/auth/github` - Initiate GitHub OAuth
+- `POST /api/auth/github/callback` - Handle OAuth callback
+- `GET /api/auth/user` - Get current user info
+- `POST /api/auth/logout` - Logout user
+- `GET /api/auth/github/repositories` - Get user's GitHub repos
+
+### 💬 **Chat Management**
+- `POST /api/chats` - Create new chat
+- `GET /api/chats` - Get user's chats
+- `GET /api/chats/{chat_id}` - Get specific chat
+- `GET /api/chats/{chat_id}/messages` - Get chat messages
+- `POST /api/chats/{chat_id}/messages` - Send message
+- `PUT /api/chats/{chat_id}/title` - Update chat title
+- `POST /api/chats/{chat_id}/archive` - Archive chat
+- `DELETE /api/chats/{chat_id}` - Delete chat
+
+### 📁 **Repository Management**
+- `POST /api/clone-repository` - Clone repository (with auth support)
+- `GET /api/user/repositories` - Get user's repositories
 
 ### **Core Repository Operations**
 ```bash
