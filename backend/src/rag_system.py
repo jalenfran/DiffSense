@@ -206,9 +206,10 @@ class RepositoryKnowledgeBase:
         # Extract filters
         filters = {}
         
-        # Time filters
+        # Time filters - REMOVED: Don't filter by time, just get more recent commits
+        # Users want to see the latest commits regardless of when they occurred
         if 'recent' in query_lower or 'latest' in query_lower:
-            filters['time_limit'] = 30  # days
+            filters['prioritize_recent'] = True  # Flag to prioritize recent commits
         elif 'last week' in query_lower:
             filters['time_limit'] = 7
         elif 'last month' in query_lower:
@@ -388,12 +389,16 @@ class RepositoryKnowledgeBase:
             commits = []
             reasoning_parts = []
             
-            # Get commits with time filter
+            # Get commits with smart filtering
             max_count = 500  # Increased from 100 to 500 for better coverage
             if 'time_limit' in filters:
                 since_date = datetime.now() - timedelta(days=filters['time_limit'])
                 commit_iter = repo.iter_commits(since=since_date, max_count=max_count)
                 reasoning_parts.append(f"Last {filters['time_limit']} days")
+            elif filters.get('prioritize_recent'):
+                # For "recent/latest" queries, get more commits but prioritize by recency
+                commit_iter = repo.iter_commits(max_count=max_count)
+                reasoning_parts.append("Most recent commits (no time limit)")
             else:
                 commit_iter = repo.iter_commits(max_count=max_count)
             

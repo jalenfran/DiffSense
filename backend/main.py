@@ -72,6 +72,11 @@ from src.embedding_engine import SemanticAnalyzer, TextEmbedder, CodeEmbedder
 from src.database import DatabaseManager, User, Chat, ChatMessage, Commit, Repository, CommitAnalysis, RepositoryDashboard, FileContent, FileHistory, CommitFileCache
 from src.storage_manager import RepositoryStorageManager
 from src.github_service import GitHubService
+# Enhanced intelligent systems
+from src.smart_code_analyzer import SmartCodeAnalyzer
+from src.enhanced_rag_system import EnhancedRAGSystem
+from src.advanced_claude_analyzer import AdvancedClaudeAnalyzer
+from src.smart_suggestions_engine import SmartSuggestionsEngine
 
 app = FastAPI(title="DiffSense API", description="Semantic drift detection for git repositories")
 
@@ -1313,85 +1318,168 @@ async def analyze_commit_range(repo_id: str, request: AnalyzeCommitRangeRequest)
 
 @app.post("/api/query-repository/{repo_id}")
 async def query_repository(repo_id: str, request: QueryRepositoryRequest):
-    """Smart query using Smart RAG + Claude for direct answers"""
+    """Enhanced intelligent query using Smart RAG + Multi-Expert Claude Analysis"""
+    
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found. Please clone first.")
         
         git_analyzer = active_repos[repo_id]
         
-        # Initialize RAG with git analyzer
-        rag_system.git_analyzer = git_analyzer
+        # Step 1: Smart Code Analysis - Deep understanding of repository structure
+        from src.smart_code_analyzer import SmartCodeAnalyzer
+        code_analyzer = SmartCodeAnalyzer()
         
-        # Step 1: Smart context gathering with proper structure
-        query_type, keywords, filters = rag_system._analyze_query(request.query)
+        # Analyze repository structure and get relevant files
+        relevant_files = code_analyzer.find_relevant_files(git_analyzer, request.query)
+        file_analyses = []
         
-        # Get repository context
-        repo_context = rag_system._get_repo_context(repo_id)
+        for file_path in relevant_files[:10]:  # Analyze top 10 most relevant files
+            try:
+                analysis = code_analyzer.analyze_file_deep(git_analyzer, file_path)
+                file_analyses.append(analysis)
+            except Exception as e:
+                logger.warning(f"Failed to analyze file {file_path}: {e}")
+                continue
         
-        # Gather detailed context based on query type
-        if query_type == 'file':
-            context = rag_system._gather_file_context(repo_id, keywords, filters)
-        elif query_type == 'commit':
-            context = rag_system._gather_commit_context(repo_id, keywords, filters)
-        elif query_type == 'author':
-            context = rag_system._gather_author_context(repo_id, keywords, filters)
-        elif query_type == 'security':
-            context = rag_system._gather_security_context(repo_id, keywords, filters)
-        elif query_type == 'diff':
-            context = rag_system._gather_diff_context(repo_id, keywords, filters)
-        else:
-            context = rag_system._gather_general_context(repo_id, keywords, filters)
+        # Step 2: Enhanced RAG with intelligent context gathering
+        from src.enhanced_rag_system import EnhancedRAGSystem
+        enhanced_rag = EnhancedRAGSystem(semantic_analyzer, claude_analyzer)
         
-        # Calculate confidence
-        confidence = rag_system._calculate_confidence(context, request.query)
+        # Get intelligent query analysis
+        query_analysis = enhanced_rag.analyze_query_intent(request.query)
         
-        # Step 2: Create proper context object for Claude
-        # Create rich context for Claude
-        claude_context = SmartContext(
-            query=request.query,
-            query_type=query_type,
-            files=context.get('files', []),
-            commits=context.get('commits', []),
-            repo_context=repo_context,
-            confidence=confidence,
-            reasoning=context.get('reasoning', f'{query_type} analysis')
+        # Gather multi-layered context
+        context = enhanced_rag.gather_intelligent_context(
+            git_analyzer, request.query, query_analysis, file_analyses
         )
         
-        # Step 3: Get Claude's analysis
-        if claude_analyzer.available:
-            claude_response = claude_analyzer.analyze(claude_context)
+        # Step 3: Multi-Expert Claude Analysis
+        from src.advanced_claude_analyzer import AdvancedClaudeAnalyzer
+        advanced_claude = AdvancedClaudeAnalyzer()
+        
+        expert_analyses = {}
+        specialized_data = context.get('specialized_analysis', {})
+        
+        if advanced_claude.available:
+            # Determine which experts to consult based on query
+            relevant_domains = enhanced_rag.determine_expert_domains(request.query, query_analysis)
             
-            return RepositoryQueryResponse(
-                query=claude_response.query,
-                response=claude_response.response,
-                confidence=claude_response.confidence,
-                sources=claude_response.sources,
-                context_used=claude_response.context_used,
-                suggestions=claude_response.suggestions,
-                claude_enhanced=True
+            # Multi-expert consultation
+            expert_analyses = advanced_claude.multi_expert_consultation(
+                request.query, context, file_analyses, relevant_domains
             )
+            
+            # Synthesize expert opinions
+            expert_synthesis = advanced_claude.synthesize_expert_opinions(expert_analyses)
         else:
-            # Fallback without Claude
-            fallback_response = claude_analyzer._create_fallback_response(claude_context)
-            
-            return RepositoryQueryResponse(
-                query=fallback_response.query,
-                response=fallback_response.response,
-                confidence=fallback_response.confidence,
-                sources=fallback_response.sources,
-                context_used=fallback_response.context_used,
-                suggestions=fallback_response.suggestions,
-                claude_enhanced=False
-            )
+            expert_synthesis = {
+                'consensus_recommendations': [],
+                'unified_risk_assessment': {},
+                'cross_domain_insights': []
+            }
+        
+        # Step 4: Smart Suggestions Generation
+        from src.smart_suggestions_engine import SmartSuggestionsEngine
+        suggestions_engine = SmartSuggestionsEngine()
+        
+        smart_suggestions = suggestions_engine.generate_comprehensive_suggestions(
+            request.query, context, file_analyses, expert_analyses
+        )
+        
+        # Step 5: Build enhanced response
+        # Primary response - best expert or enhanced RAG
+        if expert_analyses:
+            # Use the highest confidence expert analysis as primary response
+            best_expert = max(expert_analyses.values(), key=lambda x: x.confidence)
+            primary_response = best_expert.analysis
+            confidence = best_expert.confidence
+        else:
+            # Fallback to enhanced RAG
+            primary_response = enhanced_rag.generate_intelligent_response(context, request.query)
+            confidence = context.get('confidence', 0.7)
+        
+        # Combine all sources
+        sources = []
+        
+        # Add file sources
+        for analysis in file_analyses:
+            sources.append({
+                'type': 'file',
+                'path': analysis.file_path,
+                'relevance': analysis.relevance_score,
+                'complexity': analysis.complexity_score,
+                'language': analysis.language
+            })
+        
+        # Add commit sources if available
+        for commit in context.get('commits', [])[:5]:
+            sources.append({
+                'type': 'commit',
+                'hash': commit.get('hash', ''),
+                'message': commit.get('message', ''),
+                'relevance': commit.get('relevance_score', 0.5)
+            })
+        
+        # Enhanced context used
+        context_used = []
+        
+        # Add expert insights
+        for domain, analysis in expert_analyses.items():
+            context_used.append({
+                'type': 'expert_analysis',
+                'domain': domain,
+                'expert_level': analysis.expert_level,
+                'confidence': analysis.confidence,
+                'key_insights': analysis.analysis[:200] + "..." if len(analysis.analysis) > 200 else analysis.analysis
+            })
+        
+        # Add code analysis context
+        if file_analyses:
+            context_used.append({
+                'type': 'code_analysis',
+                'files_analyzed': len(file_analyses),
+                'patterns_detected': sum(len(fa.architecture_patterns) for fa in file_analyses),
+                'security_issues': sum(len(fa.security_patterns) for fa in file_analyses)
+            })
+        
+        # Build comprehensive suggestions combining all sources
+        all_suggestions = []
+        
+        # Smart suggestions (contextual)
+        all_suggestions.extend(smart_suggestions.get('contextual_suggestions', []))
+        
+        # Expert recommendations
+        for domain, analysis in expert_analyses.items():
+            for rec in analysis.actionable_recommendations[:2]:  # Top 2 per expert
+                all_suggestions.append(f"[{domain.title()} Expert] {rec['text']}")
+        
+        # Enhanced suggestions from synthesis
+        for consensus in expert_synthesis.get('consensus_recommendations', [])[:3]:
+            domains_str = ", ".join(consensus['supporting_domains'])
+            all_suggestions.append(f"[Multi-Expert Consensus: {domains_str}] {consensus['primary_recommendation']}")
+        
+        # Intelligent follow-up suggestions
+        all_suggestions.extend(smart_suggestions.get('follow_up_suggestions', []))
+        
+        # Limit suggestions to most relevant
+        final_suggestions = all_suggestions[:8]
+        
+        return RepositoryQueryResponse(
+            query=request.query,
+            response=primary_response,
+            confidence=confidence,
+            sources=sources,
+            context_used=[item.get('content', str(item)) if isinstance(item, dict) else str(item) for item in context_used],
+            suggestions=final_suggestions,
+            claude_enhanced=advanced_claude.available
+        )
         
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.error(f"Smart query failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
-    except Exception as e:
-        logger.error(f"Smart query failed: {str(e)}")
+        logger.error(f"Enhanced query failed: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/summary")
