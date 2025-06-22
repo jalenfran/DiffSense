@@ -69,7 +69,7 @@ from src.breaking_change_detector import BreakingChangeDetector, CommitBreakingC
 from src.rag_system import RepositoryKnowledgeBase
 from src.claude_analyzer import ClaudeAnalyzer, SmartContext
 from src.embedding_engine import SemanticAnalyzer, TextEmbedder, CodeEmbedder
-from src.database import DatabaseManager, User, Chat, ChatMessage, Commit, Repository, CommitAnalysis, RepositoryDashboard
+from src.database import DatabaseManager, User, Chat, ChatMessage, Commit, Repository, CommitAnalysis, RepositoryDashboard, FileContent, FileHistory, CommitFileCache
 from src.storage_manager import RepositoryStorageManager
 from src.github_service import GitHubService
 
@@ -282,6 +282,35 @@ async def require_auth(current_user: Optional[str] = Depends(get_current_user)) 
     """Require authentication for endpoints"""
     if not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
+    return current_user
+
+def check_repository_access(repo_id: str, current_user: str) -> bool:
+    """Check if the current user has access to the specified repository"""
+    try:
+        # Get the repository from database
+        repository = db_manager.get_repository(repo_id)
+        if not repository:
+            return False
+        
+        # Check if user owns this repository
+        if repository.user_id == current_user:
+            return True
+        
+        # For now, we'll use a simple ownership model
+        # In the future, this could be extended to support team access, public repos, etc.
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking repository access: {e}")
+        return False
+
+async def require_repository_access(repo_id: str, current_user: str = Depends(require_auth)) -> str:
+    """Require authentication and repository access for endpoints"""
+    if not check_repository_access(repo_id, current_user):
+        raise HTTPException(
+            status_code=403, 
+            detail="Access denied. You don't have permission to access this repository."
+        )
     return current_user
 
 # Startup event handler to load existing repositories
@@ -814,7 +843,10 @@ async def analyze_function_drift(repo_id: str, request: AnalyzeFunctionRequest):
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/files")
-async def list_repository_files(repo_id: str):
+async def list_repository_files(
+    repo_id: str,
+    current_user: str = Depends(require_repository_access)
+):
     """List files in the repository for selection"""
     try:
         if repo_id not in active_repos:
@@ -849,7 +881,10 @@ async def list_repository_files(repo_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/stats")
-async def get_repository_stats(repo_id: str):
+async def get_repository_stats(
+    repo_id: str,
+    current_user: str = Depends(require_repository_access)
+):
     """Get detailed repository statistics"""
     try:
         if repo_id not in active_repos:
@@ -864,7 +899,10 @@ async def get_repository_stats(repo_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
 
 @app.delete("/api/repository/{repo_id}")
-async def cleanup_repository(repo_id: str):
+async def cleanup_repository(
+    repo_id: str,
+    current_user: str = Depends(require_repository_access)
+):
     """Clean up repository resources"""
     try:
         if repo_id in active_repos:
@@ -881,7 +919,11 @@ async def cleanup_repository(repo_id: str):
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/commits")
-async def get_repository_commits(repo_id: str, limit: int = Query(50, description="Maximum number of commits to return")):
+async def get_repository_commits(
+    repo_id: str, 
+    limit: int = Query(50, description="Maximum number of commits to return"),
+    current_user: str = Depends(require_repository_access)
+):
     """Get list of commits for a repository"""
     try:
         if repo_id not in active_repos:
@@ -1353,7 +1395,10 @@ async def query_repository(repo_id: str, request: QueryRepositoryRequest):
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/summary")
-async def get_repository_summary(repo_id: str):
+async def get_repository_summary(
+    repo_id: str,
+    current_user: str = Depends(require_repository_access)
+):
     """Get comprehensive repository summary with risk analysis"""
     try:
         if repo_id not in active_repos:
@@ -1380,7 +1425,12 @@ async def get_repository_summary(repo_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get summary: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/commits/search")
-async def search_commits(repo_id: str, query: str = Query(...), max_results: int = Query(10)):
+async def search_commits(
+    repo_id: str, 
+    query: str = Query(...), 
+    max_results: int = Query(10),
+    current_user: str = Depends(require_repository_access)
+):
     """Search commits using semantic search"""
     try:
         if repo_id not in active_repos:
@@ -1398,7 +1448,12 @@ async def search_commits(repo_id: str, query: str = Query(...), max_results: int
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/files/search")
-async def search_files(repo_id: str, query: str = Query(...), max_results: int = Query(10)):
+async def search_files(
+    repo_id: str, 
+    query: str = Query(...), 
+    max_results: int = Query(10),
+    current_user: str = Depends(require_repository_access)
+):
     """Search files using semantic search"""
     try:
         if repo_id not in active_repos:
@@ -1416,7 +1471,11 @@ async def search_files(repo_id: str, query: str = Query(...), max_results: int =
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/risk-dashboard")
-async def get_risk_dashboard(repo_id: str, force_refresh: bool = Query(False, description="Force refresh of dashboard")):
+async def get_risk_dashboard(
+    repo_id: str, 
+    force_refresh: bool = Query(False, description="Force refresh of dashboard"),
+    current_user: str = Depends(require_repository_access)
+):
     """Get comprehensive risk dashboard for repository with intelligent caching"""
     try:
         if repo_id not in active_repos:
@@ -1571,7 +1630,11 @@ async def get_risk_dashboard(repo_id: str, force_refresh: bool = Query(False, de
         raise HTTPException(status_code=500, detail=f"Failed to generate risk dashboard: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/commit/{commit_hash}/analysis")
-async def get_commit_analysis(repo_id: str, commit_hash: str):
+async def get_commit_analysis(
+    repo_id: str, 
+    commit_hash: str,
+    current_user: str = Depends(require_repository_access)
+):
     """Get detailed analysis of a specific commit with RAG context"""
     try:
         if repo_id not in active_repos:
@@ -1628,7 +1691,11 @@ async def get_commit_analysis(repo_id: str, commit_hash: str):
         raise HTTPException(status_code=500, detail=f"Commit analysis failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/file/{file_path:path}/insights")
-async def get_file_insights(repo_id: str, file_path: str):
+async def get_file_insights(
+    repo_id: str, 
+    file_path: str,
+    current_user: str = Depends(require_repository_access)
+):
     """Get comprehensive insights about a specific file"""
     try:
         if repo_id not in active_repos:
@@ -1713,7 +1780,11 @@ async def get_file_insights(repo_id: str, file_path: str):
         raise HTTPException(status_code=500, detail=f"File insights failed: {str(e)}")
 
 @app.post("/api/repository/{repo_id}/query/enhanced")
-async def enhanced_rag_query(repo_id: str, request: QueryRequest):
+async def enhanced_rag_query(
+    repo_id: str, 
+    request: QueryRequest,
+    current_user: str = Depends(require_repository_access)
+):
     """Enhanced RAG query with Claude integration and advanced context analysis"""
     try:
         if repo_id not in active_repos:
@@ -1777,7 +1848,11 @@ async def enhanced_rag_query(repo_id: str, request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"Enhanced query failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/insights/semantic-drift")
-async def get_semantic_drift_analysis(repo_id: str, days: int = Query(30, description="Number of days to analyze")):
+async def get_semantic_drift_analysis(
+    repo_id: str, 
+    days: int = Query(30, description="Number of days to analyze"),
+    current_user: str = Depends(require_repository_access)
+):
     """Analyze semantic drift patterns in the repository"""
     try:
         if repo_id not in active_repos:
@@ -1912,6 +1987,660 @@ async def get_semantic_drift_analysis(repo_id: str, days: int = Query(30, descri
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Semantic drift analysis failed: {str(e)}")
 
+# ===== FILE AND COMMIT CONTENT ENDPOINTS =====
+
+# Caching helper functions
+def detect_file_language(file_path: str) -> str:
+    """Detect file language from file extension"""
+    ext = os.path.splitext(file_path)[1].lower()
+    language_map = {
+        '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+        '.jsx': 'javascript', '.tsx': 'typescript', '.vue': 'vue',
+        '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.h': 'c',
+        '.rs': 'rust', '.go': 'go', '.rb': 'ruby', '.php': 'php',
+        '.cs': 'csharp', '.swift': 'swift', '.kt': 'kotlin',
+        '.md': 'markdown', '.txt': 'text', '.json': 'json',
+        '.xml': 'xml', '.html': 'html', '.css': 'css', '.scss': 'scss',
+        '.sql': 'sql', '.sh': 'bash', '.bat': 'batch', '.yml': 'yaml', '.yaml': 'yaml'
+    }
+    return language_map.get(ext, 'text')
+
+def get_or_cache_file_content(repo_id: str, file_path: str, commit_hash: str, git_analyzer: GitAnalyzer) -> Optional[FileContent]:
+    """Get file content from cache or fetch and cache it"""
+    
+    # Try to get from cache first
+    cached_content = db_manager.get_cached_file_content(repo_id, file_path, commit_hash)
+    if cached_content:
+        logger.debug(f"Retrieved file content from cache: {file_path}@{commit_hash[:8]}")
+        return cached_content
+    
+    # Not cached, fetch from git
+    try:
+        repo = git_analyzer.repo
+        commit = repo.commit(commit_hash)
+        file_content = commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+        file_size = len(file_content)
+        lines_count = len(file_content.split('\n'))
+        language = detect_file_language(file_path)
+        
+        # Create cache entry
+        cached_file = FileContent(
+            id=f"{repo_id}_{file_path}_{commit_hash}",
+            repo_id=repo_id,
+            file_path=file_path,
+            commit_hash=commit_hash,
+            content=file_content,
+            size_bytes=file_size,
+            lines_count=lines_count,
+            language=language,
+            cached_at=datetime.now().isoformat(),
+            expires_at=(datetime.now() + timedelta(days=7)).isoformat()  # Cache for 7 days
+        )
+        
+        # Save to cache
+        if db_manager.cache_file_content(cached_file):
+            logger.debug(f"Cached file content: {file_path}@{commit_hash[:8]}")
+        
+        return cached_file
+        
+    except Exception as e:
+        logger.error(f"Error fetching file content: {e}")
+        return None
+
+def get_or_cache_commit_files(repo_id: str, commit_hash: str, git_analyzer: GitAnalyzer, include_diff_stats: bool = False) -> Optional[CommitFileCache]:
+    """Get commit files data from cache or fetch and cache it"""
+    
+    # Try to get from cache first
+    cached_data = db_manager.get_cached_commit_files(repo_id, commit_hash)
+    if cached_data and not include_diff_stats:
+        logger.debug(f"Retrieved commit files from cache: {commit_hash[:8]}")
+        return cached_data
+    
+    # Not cached or need diff stats, fetch from git
+    try:
+        repo = git_analyzer.repo
+        commit = repo.commit(commit_hash)
+        
+        files_changed = []
+        total_insertions = 0
+        total_deletions = 0
+        
+        if not commit.parents:
+            # First commit - all files are new
+            for item in commit.tree.traverse():
+                if item.type == 'blob':
+                    file_info = {
+                        "file_path": item.path,
+                        "change_type": "A",  # Added
+                        "size": item.size,
+                        "language": detect_file_language(item.path)
+                    }
+                    
+                    if include_diff_stats:
+                        try:
+                            content = item.data_stream.read().decode('utf-8', errors='ignore')
+                            lines_count = len(content.split('\n'))
+                            file_info.update({
+                                "insertions": lines_count,
+                                "deletions": 0,
+                                "changes": lines_count
+                            })
+                            total_insertions += lines_count
+                        except:
+                            file_info.update({"insertions": 0, "deletions": 0, "changes": 0})
+                    
+                    files_changed.append(file_info)
+        else:
+            # Get diff from parent
+            parent_commit = commit.parents[0]
+            diffs = parent_commit.diff(commit)
+            
+            for diff_item in diffs:
+                file_path = diff_item.a_path or diff_item.b_path
+                change_type_map = {'A': 'A', 'D': 'D', 'M': 'M', 'R': 'R', 'C': 'C', 'T': 'T'}
+                
+                file_info = {
+                    "file_path": file_path,
+                    "change_type": change_type_map.get(diff_item.change_type, 'M'),
+                    "size": diff_item.b_blob.size if diff_item.b_blob else 0,
+                    "language": detect_file_language(file_path)
+                }
+                
+                if diff_item.change_type == 'R' and diff_item.a_path != diff_item.b_path:
+                    file_info["old_path"] = diff_item.a_path
+                    file_info["new_path"] = diff_item.b_path
+                
+                if include_diff_stats and diff_item.diff:
+                    try:
+                        diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                        insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                        deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                        
+                        file_info.update({
+                            "insertions": max(0, insertions),
+                            "deletions": max(0, deletions),
+                            "changes": max(0, insertions) + max(0, deletions)
+                        })
+                        total_insertions += max(0, insertions)
+                        total_deletions += max(0, deletions)
+                    except:
+                        file_info.update({"insertions": 0, "deletions": 0, "changes": 0})
+                
+                files_changed.append(file_info)
+        
+        # Create summary stats
+        summary_stats = {
+            "total_files": len(files_changed),
+            "total_insertions": total_insertions,
+            "total_deletions": total_deletions,
+            "total_changes": total_insertions + total_deletions,
+            "files_by_type": {
+                "added": len([f for f in files_changed if f["change_type"] == "A"]),
+                "modified": len([f for f in files_changed if f["change_type"] == "M"]),
+                "deleted": len([f for f in files_changed if f["change_type"] == "D"]),
+                "renamed": len([f for f in files_changed if f["change_type"] == "R"])
+            }
+        }
+        
+        # Create cache entry
+        cached_commit = CommitFileCache(
+            id=f"{repo_id}_{commit_hash}",
+            repo_id=repo_id,
+            commit_hash=commit_hash,
+            files_data=json.dumps(files_changed),
+            summary_stats=json.dumps(summary_stats),
+            cached_at=datetime.now().isoformat()
+        )
+        
+        # Save to cache (only if not including diff stats to avoid large cache entries)
+        if not include_diff_stats and db_manager.cache_commit_files(cached_commit):
+            logger.debug(f"Cached commit files: {commit_hash[:8]}")
+        
+        return cached_commit
+        
+    except Exception as e:
+        logger.error(f"Error fetching commit files: {e}")
+        return None
+
+@app.get("/api/repository/{repo_id}/file/{file_path:path}")
+async def get_file_content(
+    repo_id: str, 
+    file_path: str,
+    commit_hash: str = Query(None, description="Specific commit hash, defaults to HEAD"),
+    show_diff: bool = Query(False, description="Show git diff instead of full content"),
+    current_user: str = Depends(require_repository_access)
+):
+    """Get file content at a specific commit or show diff"""
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        git_analyzer = active_repos[repo_id]
+        repo = git_analyzer.repo
+        
+        # Use HEAD if no commit specified
+        if not commit_hash:
+            commit_hash = repo.head.commit.hexsha
+        
+        # Get the commit
+        try:
+            commit = repo.commit(commit_hash)
+        except:
+            raise HTTPException(status_code=404, detail="Commit not found")
+        
+        if show_diff:
+            # Show git diff for this file
+            if not commit.parents:
+                # First commit - show entire file as added
+                try:
+                    # Try to get from cache first
+                    cached_content = get_or_cache_file_content(repo_id, file_path, commit_hash, git_analyzer)
+                    if cached_content:
+                        file_content = cached_content.content
+                    else:
+                        file_content = commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                    
+                    diff_content = f"--- /dev/null\n+++ b/{file_path}\n"
+                    for i, line in enumerate(file_content.split('\n'), 1):
+                        diff_content += f"+{line}\n"
+                    
+                    return {
+                        "repo_id": repo_id,
+                        "file_path": file_path,
+                        "commit_hash": commit_hash,
+                        "type": "diff",
+                        "content": diff_content,
+                        "message": "First commit - entire file added",
+                        "cached": cached_content is not None
+                    }
+                except:
+                    raise HTTPException(status_code=404, detail="File not found in commit")
+            else:
+                # Get diff between parent and current commit
+                parent_commit = commit.parents[0]
+                try:
+                    diffs = parent_commit.diff(commit, paths=[file_path], create_patch=True)
+                    if not diffs:
+                        raise HTTPException(status_code=404, detail="No changes found for this file in this commit")
+                    
+                    diff_content = str(diffs[0])
+                    return {
+                        "repo_id": repo_id,
+                        "file_path": file_path,
+                        "commit_hash": commit_hash,
+                        "parent_commit": parent_commit.hexsha,
+                        "type": "diff",
+                        "content": diff_content,
+                        "change_type": diffs[0].change_type,
+                        "insertions": diffs[0].diff.decode('utf-8').count('\n+') if diffs[0].diff else 0,
+                        "deletions": diffs[0].diff.decode('utf-8').count('\n-') if diffs[0].diff else 0
+                    }
+                except Exception as e:
+                    raise HTTPException(status_code=404, detail=f"Error generating diff: {str(e)}")
+        else:
+            # Show full file content using cache
+            cached_content = get_or_cache_file_content(repo_id, file_path, commit_hash, git_analyzer)
+            if not cached_content:
+                raise HTTPException(status_code=404, detail="File not found in commit")
+            
+            return {
+                "repo_id": repo_id,
+                "file_path": file_path,
+                "commit_hash": commit_hash,
+                "type": "content",
+                "content": cached_content.content,
+                "language": cached_content.language,
+                "size_bytes": cached_content.size_bytes,
+                "lines": cached_content.lines_count,
+                "cached_at": cached_content.cached_at,
+                "from_cache": True,
+                "commit_info": {
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "date": commit.committed_datetime.isoformat(),
+                    "hash": commit.hexsha
+                }
+            }
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file content: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get file content: {str(e)}")
+
+@app.get("/api/repository/{repo_id}/commit/{commit_hash}/files")
+async def get_commit_files(
+    repo_id: str,
+    commit_hash: str,
+    include_diff_stats: bool = Query(False, description="Include diff statistics for each file"),
+    current_user: str = Depends(require_repository_access)
+):
+    """Get list of files changed in a specific commit"""
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        git_analyzer = active_repos[repo_id]
+        
+        # Use caching function to get commit files data
+        cached_commit = get_or_cache_commit_files(repo_id, commit_hash, git_analyzer, include_diff_stats)
+        if not cached_commit:
+            raise HTTPException(status_code=404, detail="Commit not found or error processing commit")
+        
+        # Parse cached data
+        files_changed = json.loads(cached_commit.files_data)
+        summary_stats = json.loads(cached_commit.summary_stats)
+        
+        # Get commit info
+        repo = git_analyzer.repo
+        try:
+            commit = repo.commit(commit_hash)
+        except:
+            raise HTTPException(status_code=404, detail="Commit not found")
+        
+        return {
+            "repo_id": repo_id,
+            "commit_hash": commit_hash,
+            "commit_info": {
+                "message": commit.message.strip(),
+                "author": commit.author.name,
+                "email": commit.author.email,
+                "date": commit.committed_datetime.isoformat(),
+                "hash": commit.hexsha
+            },
+            "files_changed": files_changed,
+            "summary": summary_stats,
+            "cached_at": cached_commit.cached_at,
+            "from_cache": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting commit files: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get commit files: {str(e)}")
+
+@app.get("/api/repository/{repo_id}/file-history/{file_path:path}")
+async def get_file_history(
+    repo_id: str,
+    file_path: str,
+    limit: int = Query(50, description="Maximum number of commits to return"),
+    show_diffs: bool = Query(False, description="Include diff content for each commit"),
+    current_user: str = Depends(require_repository_access)
+):
+    """Get commit history for a specific file"""
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        git_analyzer = active_repos[repo_id]
+        repo = git_analyzer.repo
+        
+        # Get commits that touched this file
+        file_commits = list(repo.iter_commits(paths=file_path, max_count=limit))
+        
+        if not file_commits:
+            raise HTTPException(status_code=404, detail="File not found or no commit history")
+        
+        history = []
+        
+        for commit in file_commits:
+            commit_info = {
+                "commit_hash": commit.hexsha,
+                "short_hash": commit.hexsha[:8],
+                "message": commit.message.strip(),
+                "author": commit.author.name,
+                "email": commit.author.email,
+                "date": commit.committed_datetime.isoformat(),
+                "change_type": "M"  # Default to modified
+            }
+            
+            # Determine change type and get diff if requested
+            if commit.parents:
+                parent_commit = commit.parents[0]
+                try:
+                    diffs = parent_commit.diff(commit, paths=[file_path])
+                    if diffs:
+                        diff_item = diffs[0]
+                        change_type_map = {
+                            'A': 'added',
+                            'D': 'deleted', 
+                            'M': 'modified',
+                            'R': 'renamed',
+                            'C': 'copied'
+                        }
+                        commit_info["change_type"] = change_type_map.get(diff_item.change_type, 'modified')
+                        
+                        if show_diffs:
+                            try:
+                                diff_content = str(diff_item)
+                                commit_info["diff"] = diff_content
+                                
+                                # Calculate diff stats
+                                if diff_item.diff:
+                                    diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                                    insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                                    deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                                    
+                                    commit_info["diff_stats"] = {
+                                        "insertions": max(0, insertions),
+                                        "deletions": max(0, deletions),
+                                        "changes": max(0, insertions) + max(0, deletions)
+                                    }
+                            except Exception as e:
+                                logger.debug(f"Error getting diff for {commit.hexsha}: {e}")
+                except Exception as e:
+                    logger.debug(f"Error processing commit {commit.hexsha}: {e}")
+            else:
+                # First commit
+                commit_info["change_type"] = "added"
+                if show_diffs:
+                    try:
+                        file_content = commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                        lines = file_content.split('\n')
+                        diff_content = f"--- /dev/null\n+++ b/{file_path}\n"
+                        for line in lines:
+                            diff_content += f"+{line}\n"
+                        commit_info["diff"] = diff_content
+                        commit_info["diff_stats"] = {
+                            "insertions": len(lines),
+                            "deletions": 0,
+                            "changes": len(lines)
+                        }
+                    except Exception as e:
+                        logger.debug(f"Error getting initial content for {commit.hexsha}: {e}")
+            
+            history.append(commit_info)
+        
+        return {
+            "repo_id": repo_id,
+            "file_path": file_path,
+            "total_commits": len(history),
+            "history": history,
+            "file_info": {
+                "first_commit": history[-1]["commit_hash"] if history else None,
+                "last_modified": history[0]["commit_hash"] if history else None,
+                "total_authors": len(set(c["author"] for c in history))
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get file history: {str(e)}")
+
+@app.get("/api/repository/{repo_id}/compare/{base_commit}...{head_commit}")
+async def compare_commits(
+    repo_id: str,
+    base_commit: str,
+    head_commit: str,
+    file_path: str = Query(None, description="Specific file to compare (optional)"),
+    context_lines: int = Query(3, description="Number of context lines in diff"),
+    current_user: str = Depends(require_repository_access)
+):
+    """Compare two commits or compare a specific file between commits"""
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        git_analyzer = active_repos[repo_id]
+        repo = git_analyzer.repo
+        
+        # Get commits
+        try:
+            base = repo.commit(base_commit)
+            head = repo.commit(head_commit)
+        except:
+            raise HTTPException(status_code=404, detail="One or both commits not found")
+        
+        if file_path:
+            # Compare specific file
+            try:
+                diffs = base.diff(head, paths=[file_path], create_patch=True)
+                if not diffs:
+                    # Check if file exists in both commits
+                    base_has_file = file_path in [item.path for item in base.tree.traverse() if item.type == 'blob']
+                    head_has_file = file_path in [item.path for item in head.tree.traverse() if item.type == 'blob']
+                    
+                    if not base_has_file and not head_has_file:
+                        raise HTTPException(status_code=404, detail="File not found in either commit")
+                    elif not base_has_file:
+                        # File was added
+                        file_content = head.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                        diff_content = f"--- /dev/null\n+++ b/{file_path}\n"
+                        for line in file_content.split('\n'):
+                            diff_content += f"+{line}\n"
+                        
+                        return {
+                            "repo_id": repo_id,
+                            "base_commit": base_commit,
+                            "head_commit": head_commit,
+                            "file_path": file_path,
+                            "change_type": "added",
+                            "diff": diff_content
+                        }
+                    elif not head_has_file:
+                        # File was deleted
+                        file_content = base.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                        diff_content = f"--- a/{file_path}\n+++ /dev/null\n"
+                        for line in file_content.split('\n'):
+                            diff_content += f"-{line}\n"
+                        
+                        return {
+                            "repo_id": repo_id,
+                            "base_commit": base_commit,
+                            "head_commit": head_commit,
+                            "file_path": file_path,
+                            "change_type": "deleted",
+                            "diff": diff_content
+                        }
+                    else:
+                        return {
+                            "repo_id": repo_id,
+                            "base_commit": base_commit,
+                            "head_commit": head_commit,
+                            "file_path": file_path,
+                            "change_type": "unchanged",
+                            "diff": "No changes detected",
+                            "message": "File exists in both commits but no differences found"
+                        }
+                
+                diff_item = diffs[0]
+                change_type_map = {
+                    'A': 'added',
+                    'D': 'deleted',
+                    'M': 'modified',
+                    'R': 'renamed',
+                    'C': 'copied'
+                }
+                
+                # Calculate diff stats
+                diff_stats = {"insertions": 0, "deletions": 0}
+                if diff_item.diff:
+                    diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                    insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                    deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                    diff_stats = {
+                        "insertions": max(0, insertions),
+                        "deletions": max(0, deletions),
+                        "changes": max(0, insertions) + max(0, deletions)
+                    }
+                
+                return {
+                    "repo_id": repo_id,
+                    "base_commit": base_commit,
+                    "head_commit": head_commit,
+                    "file_path": file_path,
+                    "change_type": change_type_map.get(diff_item.change_type, 'modified'),
+                    "diff": str(diff_item),
+                    "diff_stats": diff_stats,
+                    "commit_info": {
+                        "base": {
+                            "hash": base.hexsha,
+                            "message": base.message.strip(),
+                            "author": base.author.name,
+                            "date": base.committed_datetime.isoformat()
+                        },
+                        "head": {
+                            "hash": head.hexsha,
+                            "message": head.message.strip(),
+                            "author": head.author.name,
+                            "date": head.committed_datetime.isoformat()
+                        }
+                    }
+                }
+                
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error comparing file: {str(e)}")
+        else:
+            # Compare all files between commits
+            diffs = base.diff(head)
+            
+            files_changed = []
+            total_insertions = 0
+            total_deletions = 0
+            
+            for diff_item in diffs:
+                file_path = diff_item.a_path or diff_item.b_path
+                change_type_map = {
+                    'A': 'added',
+                    'D': 'deleted',
+                    'M': 'modified',
+                    'R': 'renamed',
+                    'C': 'copied'
+                }
+                
+                file_info = {
+                    "file_path": file_path,
+                    "change_type": change_type_map.get(diff_item.change_type, 'modified')
+                }
+                
+                if diff_item.change_type == 'R':
+                    file_info["old_path"] = diff_item.a_path
+                    file_info["new_path"] = diff_item.b_path
+                
+                # Calculate diff stats
+                if diff_item.diff:
+                    try:
+                        diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                        insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                        deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                        
+                        file_info["diff_stats"] = {
+                            "insertions": max(0, insertions),
+                            "deletions": max(0, deletions),
+                            "changes": max(0, insertions) + max(0, deletions)
+                        }
+                        
+                        total_insertions += max(0, insertions)
+                        total_deletions += max(0, deletions)
+                    except:
+                        file_info["diff_stats"] = {"insertions": 0, "deletions": 0, "changes": 0}
+                else:
+                    file_info["diff_stats"] = {"insertions": 0, "deletions": 0, "changes": 0}
+                
+                files_changed.append(file_info)
+            
+            return {
+                "repo_id": repo_id,
+                "base_commit": base_commit,
+                "head_commit": head_commit,
+                "files_changed": files_changed,
+                "summary": {
+                    "total_files": len(files_changed),
+                    "total_insertions": total_insertions,
+                    "total_deletions": total_deletions,
+                    "total_changes": total_insertions + total_deletions,
+                    "files_by_type": {
+                        "added": len([f for f in files_changed if f["change_type"] == "added"]),
+                        "modified": len([f for f in files_changed if f["change_type"] == "modified"]),
+                        "deleted": len([f for f in files_changed if f["change_type"] == "deleted"]),
+                        "renamed": len([f for f in files_changed if f["change_type"] == "renamed"])
+                    }
+                },
+                "commit_info": {
+                    "base": {
+                        "hash": base.hexsha,
+                        "message": base.message.strip(),
+                        "author": base.author.name,
+                        "date": base.committed_datetime.isoformat()
+                    },
+                    "head": {
+                        "hash": head.hexsha,
+                        "message": head.message.strip(),
+                        "author": head.author.name,
+                        "date": head.committed_datetime.isoformat()
+                    }
+                }
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error comparing commits: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to compare commits: {str(e)}")
+
 # ===== BACKGROUND TASK FUNCTIONS =====
 
 async def index_repository_for_rag(repo_id: str, repo_url: str, git_analyzer: GitAnalyzer):
@@ -1976,13 +2705,6 @@ async def store_repository_commits(repo_id: str, git_analyzer: GitAnalyzer):
     except Exception as e:
         logger.error(f"Failed to store commits for repository {repo_id}: {e}")
 
-import os
-import traceback
-import secrets
-import json
-import logging
-import numpy as np
-
 def normalize_repository_url(repo_url: str) -> str:
     """Normalize repository URL to handle different formats"""
     url = repo_url.strip().lower()
@@ -2008,5 +2730,3 @@ def normalize_repository_url(repo_url: str) -> str:
             url = f"{protocol}://{parts[1]}"
     
     return url
-
-# Load environment variables

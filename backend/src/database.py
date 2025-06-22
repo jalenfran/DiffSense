@@ -5,10 +5,13 @@ Database models and operations for DiffSense
 import sqlite3
 import json
 import os
-from datetime import datetime
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +60,45 @@ class FileRecord:
     classes: str  # JSON string
     dependencies: str  # JSON string
     semantic_embedding: Optional[bytes] = None
+
+@dataclass
+class FileContent:
+    """Cached file content model"""
+    id: str
+    repo_id: str
+    file_path: str
+    commit_hash: str
+    content: str
+    size_bytes: int
+    lines_count: int
+    language: str
+    cached_at: str
+    expires_at: Optional[str] = None  # For TTL caching
+
+@dataclass
+class FileHistory:
+    """Cached file history model"""
+    id: str
+    repo_id: str
+    file_path: str
+    commit_hash: str
+    change_type: str  # A, M, D, R
+    author: str
+    message: str
+    timestamp: str
+    diff_content: Optional[str] = None
+    insertions: int = 0
+    deletions: int = 0
+
+@dataclass
+class CommitFileCache:
+    """Cached commit files data"""
+    id: str
+    repo_id: str
+    commit_hash: str
+    files_data: str  # JSON string of files changed
+    summary_stats: str  # JSON string of summary statistics
+    cached_at: str
 
 @dataclass
 class User:
@@ -273,6 +315,57 @@ class DatabaseManager:
                 )
             """)
             
+            # File content cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS file_content (
+                    id TEXT PRIMARY KEY,
+                    repo_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    commit_hash TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    lines_count INTEGER NOT NULL,
+                    language TEXT NOT NULL,
+                    cached_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    FOREIGN KEY (repo_id) REFERENCES repositories (id),
+                    UNIQUE (repo_id, file_path, commit_hash)
+                )
+            """)
+            
+            # File history cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS file_history (
+                    id TEXT PRIMARY KEY,
+                    repo_id TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    commit_hash TEXT NOT NULL,
+                    change_type TEXT NOT NULL,
+                    author TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    diff_content TEXT,
+                    insertions INTEGER DEFAULT 0,
+                    deletions INTEGER DEFAULT 0,
+                    FOREIGN KEY (repo_id) REFERENCES repositories (id),
+                    UNIQUE (repo_id, file_path, commit_hash)
+                )
+            """)
+            
+            # Commit files cache table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS commit_file_cache (
+                    id TEXT PRIMARY KEY,
+                    repo_id TEXT NOT NULL,
+                    commit_hash TEXT NOT NULL,
+                    files_data TEXT NOT NULL,
+                    summary_stats TEXT NOT NULL,
+                    cached_at TEXT NOT NULL,
+                    FOREIGN KEY (repo_id) REFERENCES repositories (id),
+                    UNIQUE (repo_id, commit_hash)
+                )
+            """)
+            
             # Indexes for performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_repo_id ON commits (repo_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_hash ON commits (hash)")
@@ -284,6 +377,13 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commit_analysis_repo_id ON commit_analysis (repo_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_commit_analysis_hash ON commit_analysis (commit_hash)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_repository_dashboards_repo_id ON repository_dashboards (repo_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_content_repo_id ON file_content (repo_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_content_path ON file_content (file_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_content_commit ON file_content (commit_hash)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_history_repo_id ON file_history (repo_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_history_path ON file_history (file_path)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_commit_file_cache_repo_id ON commit_file_cache (repo_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_commit_file_cache_hash ON commit_file_cache (commit_hash)")
             
             conn.commit()
     
@@ -1031,6 +1131,182 @@ class DatabaseManager:
             logger.error(f"Error counting analyzed commits: {e}")
             return 0
     
+    # File Content Caching Methods
+    
+    def cache_file_content(self, file_content: FileContent) -> bool:
+        """Cache file content to database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO file_content 
+                    (id, repo_id, file_path, commit_hash, content, size_bytes, 
+                     lines_count, language, cached_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    file_content.id, file_content.repo_id, file_content.file_path,
+                    file_content.commit_hash, file_content.content, file_content.size_bytes,
+                    file_content.lines_count, file_content.language, file_content.cached_at,
+                    file_content.expires_at
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error caching file content: {e}")
+            return False
+    
+    def get_cached_file_content(self, repo_id: str, file_path: str, commit_hash: str) -> Optional[FileContent]:
+        """Get cached file content from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM file_content 
+                    WHERE repo_id = ? AND file_path = ? AND commit_hash = ?
+                """, (repo_id, file_path, commit_hash))
+                row = cursor.fetchone()
+                if row:
+                    return FileContent(*row)
+                return None
+        except Exception as e:
+            logger.error(f"Error getting cached file content: {e}")
+            return None
+    
+    def cache_file_history(self, file_history: FileHistory) -> bool:
+        """Cache file history entry to database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO file_history 
+                    (id, repo_id, file_path, commit_hash, change_type, author, 
+                     message, timestamp, diff_content, insertions, deletions)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    file_history.id, file_history.repo_id, file_history.file_path,
+                    file_history.commit_hash, file_history.change_type, file_history.author,
+                    file_history.message, file_history.timestamp, file_history.diff_content,
+                    file_history.insertions, file_history.deletions
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error caching file history: {e}")
+            return False
+    
+    def get_cached_file_history(self, repo_id: str, file_path: str, limit: int = 100) -> List[FileHistory]:
+        """Get cached file history from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM file_history 
+                    WHERE repo_id = ? AND file_path = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                """, (repo_id, file_path, limit))
+                rows = cursor.fetchall()
+                return [FileHistory(*row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error getting cached file history: {e}")
+            return []
+    
+    def cache_commit_files(self, commit_cache: CommitFileCache) -> bool:
+        """Cache commit files data to database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO commit_file_cache 
+                    (id, repo_id, commit_hash, files_data, summary_stats, cached_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    commit_cache.id, commit_cache.repo_id, commit_cache.commit_hash,
+                    commit_cache.files_data, commit_cache.summary_stats, commit_cache.cached_at
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error caching commit files: {e}")
+            return False
+    
+    def get_cached_commit_files(self, repo_id: str, commit_hash: str) -> Optional[CommitFileCache]:
+        """Get cached commit files from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM commit_file_cache 
+                    WHERE repo_id = ? AND commit_hash = ?
+                """, (repo_id, commit_hash))
+                row = cursor.fetchone()
+                if row:
+                    return CommitFileCache(*row)
+                return None
+        except Exception as e:
+            logger.error(f"Error getting cached commit files: {e}")
+            return None
+    
+    def clear_expired_cache(self) -> bool:
+        """Clear expired cache entries"""
+        try:
+            current_time = datetime.now().isoformat()
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Clear expired file content
+                cursor.execute("""
+                    DELETE FROM file_content 
+                    WHERE expires_at IS NOT NULL AND expires_at < ?
+                """, (current_time,))
+                
+                # Clean up old cache entries (older than 30 days)
+                thirty_days_ago = (datetime.now() - datetime.timedelta(days=30)).isoformat()
+                cursor.execute("""
+                    DELETE FROM file_content WHERE cached_at < ?
+                """, (thirty_days_ago,))
+                cursor.execute("""
+                    DELETE FROM commit_file_cache WHERE cached_at < ?
+                """, (thirty_days_ago,))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing expired cache: {e}")
+            return False
+    
+    def get_cache_stats(self, repo_id: str) -> Dict[str, int]:
+        """Get cache statistics for a repository"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Count cached file content
+                cursor.execute("SELECT COUNT(*) FROM file_content WHERE repo_id = ?", (repo_id,))
+                file_content_count = cursor.fetchone()[0]
+                
+                # Count cached file history
+                cursor.execute("SELECT COUNT(*) FROM file_history WHERE repo_id = ?", (repo_id,))
+                file_history_count = cursor.fetchone()[0]
+                
+                # Count cached commit files
+                cursor.execute("SELECT COUNT(*) FROM commit_file_cache WHERE repo_id = ?", (repo_id,))
+                commit_files_count = cursor.fetchone()[0]
+                
+                return {
+                    "file_content_entries": file_content_count,
+                    "file_history_entries": file_history_count,
+                    "commit_files_entries": commit_files_count,
+                    "total_cache_entries": file_content_count + file_history_count + commit_files_count
+                }
+        except Exception as e:
+            logger.error(f"Error getting cache stats: {e}")
+            return {
+                "file_content_entries": 0,
+                "file_history_entries": 0,
+                "commit_files_entries": 0,
+                "total_cache_entries": 0
+            }
+    
     # ===== DASHBOARD CACHE METHODS =====
     
     def save_dashboard_cache(self, dashboard: RepositoryDashboard) -> bool:
@@ -1058,28 +1334,48 @@ class DatabaseManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT * FROM repository_dashboards WHERE repo_id = ?
+                    SELECT id, repo_id, dashboard_data, last_updated, commits_analyzed, cache_version
+                    FROM repository_dashboards WHERE repo_id = ?
                 """, (repo_id,))
                 row = cursor.fetchone()
                 if row:
-                    return RepositoryDashboard(*row)
+                    return RepositoryDashboard(
+                        id=row[0],
+                        repo_id=row[1],
+                        dashboard_data=row[2],
+                        last_updated=row[3],
+                        commits_analyzed=row[4],
+                        cache_version=row[5]
+                    )
                 return None
         except Exception as e:
             logger.error(f"Error getting dashboard cache: {e}")
             return None
     
-    def is_dashboard_cache_valid(self, repo_id: str, max_age_hours: int = 24) -> bool:
-        """Check if dashboard cache is still valid"""
+    def is_dashboard_cache_valid(self, repo_id: str, max_age_hours: int = 6) -> bool:
+        """Check if dashboard cache is valid (not expired)"""
         try:
             dashboard = self.get_dashboard_cache(repo_id)
             if not dashboard:
                 return False
             
-            from datetime import datetime, timedelta
+            # Check if cache is expired
             last_updated = datetime.fromisoformat(dashboard.last_updated)
             max_age = timedelta(hours=max_age_hours)
             
             return datetime.now() - last_updated < max_age
         except Exception as e:
             logger.error(f"Error checking dashboard cache validity: {e}")
+            return False
+    
+    def clear_dashboard_cache(self, repo_id: str) -> bool:
+        """Clear dashboard cache for a repository"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM repository_dashboards WHERE repo_id = ?", (repo_id,))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Error clearing dashboard cache: {e}")
             return False
