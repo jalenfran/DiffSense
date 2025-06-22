@@ -5,6 +5,8 @@ import Dashboard from './components/Dashboard'
 import LoadingSpinner from './components/LoadingSpinner'
 import { DarkModeProvider } from './contexts/DarkModeContext'
 import { RepositoryProvider } from './contexts/RepositoryContext'
+import { FileViewerProvider } from './contexts/FileViewerContext'
+import { CommitViewerProvider } from './contexts/CommitViewerContext'
 
 function App() {
     const [user, setUser] = useState(null)
@@ -106,21 +108,23 @@ function App() {
 
     if (loading) {
         return <LoadingSpinner />
-    }
-
-    return (
+    }    return (
         <DarkModeProvider>
             <RepositoryProvider>
-                <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
-                    {user ? (
-                        <Dashboard
-                            user={user}
-                            onLogout={handleLogout}
-                        />
-                    ) : (
-                        <LandingPage />
-                    )}
-                </div>
+                <FileViewerProvider>
+                    <CommitViewerProvider>
+                        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors">
+                            {user ? (
+                                <Dashboard
+                                    user={user}
+                                    onLogout={handleLogout}
+                                />
+                            ) : (
+                                <LandingPage />
+                            )}
+                        </div>
+                    </CommitViewerProvider>
+                </FileViewerProvider>
             </RepositoryProvider>
         </DarkModeProvider>
     )

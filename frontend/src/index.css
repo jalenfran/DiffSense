@@ -44,3 +44,33 @@
         @apply text-gray-600 hover:bg-gray-100 hover:text-gray-900;
     }
 }
+
+@layer utilities {
+    /* Enhanced diff highlighting styles */
+    .diff-added {
+        background-color: rgba(34, 197, 94, 0.1);
+        border-left: 2px solid rgb(34, 197, 94);
+    }
+    
+    .dark .diff-added {
+        background-color: rgba(34, 197, 94, 0.2);
+    }
+    
+    .diff-removed {
+        background-color: rgba(239, 68, 68, 0.1);
+        border-left: 2px solid rgb(239, 68, 68);
+    }
+    
+    .dark .diff-removed {
+        background-color: rgba(239, 68, 68, 0.2);
+    }
+    
+    .diff-hunk {
+        background-color: rgba(59, 130, 246, 0.1);
+        border-left: 2px solid rgb(59, 130, 246);
+    }
+    
+    .dark .diff-hunk {
+        background-color: rgba(59, 130, 246, 0.2);
+    }
+}

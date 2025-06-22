@@ -2,6 +2,36 @@ import { useState, useEffect } from 'react'
 import { Search, Star, Lock, Globe, Plus, X, Loader2 } from 'lucide-react'
 import { diffSenseAPI } from '../services/api'
 
+// Helper function to format dates safely
+const formatDate = (dateString) => {
+    try {
+        if (!dateString) return 'recently'
+        
+        const date = new Date(dateString)
+        if (isNaN(date.getTime())) {
+            // Try parsing as ISO string if regular parsing fails
+            const isoDate = new Date(Date.parse(dateString))
+            if (isNaN(isoDate.getTime())) {
+                return 'recently'
+            }
+            return isoDate.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: isoDate.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+            })
+        }
+        
+        return date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
+        })
+    } catch (error) {
+        console.warn('Date formatting error:', error, 'for date:', dateString)
+        return 'recently'
+    }
+}
+
 function AddRepositoryDialog({ 
     isOpen, 
     onClose, 
@@ -12,7 +42,7 @@ function AddRepositoryDialog({
     const [isLoading, setIsLoading] = useState(false)
     const [availableRepos, setAvailableRepos] = useState([])
     const [loadingRepos, setLoadingRepos] = useState(false)
-    const [addMethod, setAddMethod] = useState('url') // 'browse' or 'url'
+    const [addMethod, setAddMethod] = useState('browse') // 'browse' or 'url'
     const [repoSearchQuery, setRepoSearchQuery] = useState('')
 
     // Filter available repos for the dialog
@@ -32,6 +62,10 @@ function AddRepositoryDialog({
         setLoadingRepos(true)
         try {
             const repos = await diffSenseAPI.getGitHubRepositories()
+            console.log('Fetched repositories:', repos) // Debug log
+            if (repos && repos.length > 0) {
+                console.log('Sample repo data:', repos[0]) // Debug log
+            }
             setAvailableRepos(repos)
         } catch (error) {
             console.error('Error fetching repositories:', error)
@@ -183,15 +217,14 @@ function AddRepositoryDialog({
                                                         <p className="text-sm text-gray-600 dark:text-gray-400 truncate mt-1">
                                                             {repo.description}
                                                         </p>
-                                                    )}
-                                                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                                    )}                                                    <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
                                                         {repo.language && (
                                                             <span className="flex items-center gap-1">
                                                                 <div className="w-2 h-2 rounded-full bg-blue-400"></div>
                                                                 {repo.language}
                                                             </span>
                                                         )}
-                                                        <span>Updated {new Date(repo.updated_at).toLocaleDateString()}</span>
+                                                        <span>Updated {formatDate(repo.updated_at)}</span>
                                                     </div>
                                                 </div>
                                                 <button

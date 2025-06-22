@@ -18,10 +18,11 @@ import {
     Plus,
     X
 } from 'lucide-react'
-import MarkdownRenderer from './MarkdownRenderer'
+import LinkifiedMarkdown from './LinkifiedMarkdown'
+import LinkifyContent from './LinkifyContent'
 import { useRepository } from '../contexts/RepositoryContext'
 
-const ChatMessage = ({ message, isUser, timestamp }) => {
+const ChatMessage = ({ message, isUser, timestamp, repoId, userAvatar }) => {
     const [isExpanded, setIsExpanded] = useState(false)
 
     const formatTimestamp = (timestamp) => {
@@ -34,11 +35,12 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
     const copyToClipboard = (text) => {
         navigator.clipboard.writeText(text)
     }
+
     const renderMessageContent = (content) => {
         if (typeof content === 'string') {
             return (
                 <div className="max-w-none">
-                    <MarkdownRenderer content={content} />
+                    <LinkifiedMarkdown content={content} repoId={repoId} />
                 </div>
             )
         }
@@ -47,9 +49,7 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
         if (content.type === 'query_response') {
             return (
                 <div className="space-y-4">
-                    <div className="max-w-none">
-                        <MarkdownRenderer content={content.response} />
-                    </div>
+                    <LinkifiedMarkdown content={content.response} repoId={repoId} />
 
                     {content.confidence && (
                         <div className="flex items-center gap-2 text-sm">
@@ -82,10 +82,15 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                             {isExpanded && (
                                 <div className="space-y-2">
                                     {content.sources.map((source, index) => (
-                                        <div key={index} className="flex items-center justify-between p-2 bg-white dark:bg-gray-700 rounded border">
-                                            <div className="flex items-center gap-2 min-w-0">
+                                        <div key={index} className="flex items-center justify-between p-2 bg-white dark:bg-gray-700 rounded border">                                            <div className="flex items-center gap-2 min-w-0">
                                                 {source.type === 'file' ? <FileText className="w-4 h-4 text-blue-500" /> : <GitCommit className="w-4 h-4 text-green-500" />}
-                                                <span className="text-sm truncate font-mono">{source.path}</span>
+                                                <span className="text-sm truncate font-mono">
+                                                    {repoId ? (
+                                                        <LinkifyContent repoId={repoId}>{source.path}</LinkifyContent>
+                                                    ) : (
+                                                        source.path
+                                                    )}
+                                                </span>
                                             </div>
                                             <div className="flex items-center gap-2">
                                                 <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -107,25 +112,27 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                 <div className="space-y-4">
                     <div className="flex items-center gap-2">
                         <GitCommit className="w-5 h-5 text-blue-500" />
-                        <span className="font-medium">Commit Analysis</span>
-                        <span className="text-sm text-gray-500 dark:text-gray-400 font-mono">
-                            {content.commit_hash?.substring(0, 7)}
+                        <span className="font-medium">Commit Analysis</span>                        <span className="text-sm text-gray-500 dark:text-gray-400 font-mono">
+                            {repoId && content.commit_hash ? (
+                                <LinkifyContent repoId={repoId}>{content.commit_hash.substring(0, 7)}</LinkifyContent>
+                            ) : (
+                                content.commit_hash?.substring(0, 7)
+                            )}
                         </span>
                     </div>
 
                     <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-600 dark:text-gray-400">Risk Score:</span>
-                        <div className="flex items-center gap-2">
+                        <span className="text-sm text-gray-600 dark:text-gray-400">Risk Score:</span>                        <div className="flex items-center gap-2">
                             <div className="w-24 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                                 <div
-                                    className={`h-2 rounded-full ${content.overall_risk_score > 0.7 ? 'bg-red-500' :
-                                            content.overall_risk_score > 0.4 ? 'bg-yellow-500' : 'bg-green-500'
+                                    className={`h-2 rounded-full ${content.overall_risk_score > 70 ? 'bg-red-500' :
+                                            content.overall_risk_score > 40 ? 'bg-yellow-500' : 'bg-green-500'
                                         }`}
-                                    style={{ width: `${content.overall_risk_score * 100}%` }}
+                                    style={{ width: `${content.overall_risk_score}%` }}
                                 />
                             </div>
                             <span className="font-medium">
-                                {Math.round(content.overall_risk_score * 100)}%
+                                {Math.round(content.overall_risk_score)}%
                             </span>
                         </div>
                     </div>
@@ -149,12 +156,11 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                                                 {change.risk_level}
                                             </span>
                                             <span className="text-sm font-medium">{change.change_type}</span>
-                                        </div>
-                                        <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                                            <MarkdownRenderer content={change.description} className="text-sm" />
+                                        </div>                                        <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                                            <LinkifiedMarkdown content={change.description} repoId={repoId} className="text-sm" />
                                         </div>
                                         <p className="text-xs text-gray-500 dark:text-gray-500 font-mono">
-                                            {change.file_path}
+                                            <LinkifyContent repoId={repoId}>{change.file_path}</LinkifyContent>
                                         </p>
                                     </div>
                                 ))}
@@ -167,9 +173,8 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                             <div className="flex items-center gap-2 mb-2">
                                 <Bot className="w-4 h-4 text-blue-500" />
                                 <span className="font-medium text-blue-700 dark:text-blue-300">AI Analysis</span>
-                            </div>
-                            <div className="text-sm">
-                                <MarkdownRenderer content={content.claude_analysis.content} />
+                            </div>                            <div className="text-sm">
+                                <LinkifiedMarkdown content={content.claude_analysis.content} repoId={repoId} />
                             </div>
                             {content.claude_analysis.suggestions && (
                                 <div className="mt-2 space-y-1">
@@ -192,11 +197,18 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
 
     return (
         <div className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
-            <div className={`flex gap-3 max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-blue-500' : 'bg-gray-600 dark:bg-gray-500'
+            <div className={`flex gap-3 max-w-[80%] ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${isUser ? 'bg-blue-500' : 'bg-gray-600 dark:bg-gray-500'
                     }`}>
                     {isUser ? (
-                        <User className="w-4 h-4 text-white" />
+                        userAvatar ? (
+                            <img
+                                src={userAvatar}
+                                alt="User avatar"
+                                className="w-8 h-8 rounded-full object-cover"
+                            />
+                        ) : (
+                            <User className="w-4 h-4 text-white" />
+                        )
                     ) : (
                         <Bot className="w-4 h-4 text-white" />
                     )}
@@ -243,8 +255,9 @@ function ChatInterface({
     selectedFiles,
     availableFiles,
     isMaximized = false,
-    onToggleMaximize
-}) {    const [inputMessage, setInputMessage] = useState('')
+    onToggleMaximize,
+    user
+}) {const [inputMessage, setInputMessage] = useState('')
     const [showFileSelector, setShowFileSelector] = useState(false)
     const [showChatDropdown, setShowChatDropdown] = useState(false)
     const messagesEndRef = useRef(null)
@@ -344,22 +357,22 @@ function ChatInterface({
         {
             label: "Analyze recent changes",
             prompt: "What are the most significant changes in the recent commits?",
-            icon: <GitCommit className="w-4 h-4" />
+            icon: <GitCommit className="w-4 h-4 text-blue-500" />
         },
         {
             label: "Find breaking changes",
             prompt: "Are there any breaking changes that could affect users?",
-            icon: <AlertTriangle className="w-4 h-4" />
+            icon: <AlertTriangle className="w-4 h-4 text-orange-500" />
         },
         {
             label: "Code structure overview",
             prompt: "Can you give me an overview of the main components and structure of this project?",
-            icon: <Code className="w-4 h-4" />
+            icon: <Code className="w-4 h-4 text-green-500" />
         },
         {
             label: "Security concerns",
             prompt: "Are there any security vulnerabilities or concerns in recent changes?",
-            icon: <Search className="w-4 h-4" />
+            icon: <Search className="w-4 h-4 text-red-500" />
         }
     ]
     return (
@@ -377,31 +390,29 @@ function ChatInterface({
                             {safeChats.length > 0 && (
                                 <ChevronDown className={`w-4 h-4 transition-transform ${showChatDropdown ? 'rotate-180' : ''}`} />
                             )}
-                        </button>
-
-                        {/* Chat Selection Dropdown */}
+                        </button>                        {/* Chat Selection Dropdown */}
                         {showChatDropdown && safeChats.length > 0 && (
-                            <div className="absolute top-full left-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[200px]">
+                            <div className="absolute top-full left-0 mt-1 bg-gray-900 dark:bg-gray-800 border border-gray-600 dark:border-gray-700 rounded-lg shadow-xl z-50 min-w-[200px]">
                                 <div className="p-2">
                                     <button
                                         onClick={handleCreateNewChat}
-                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                                        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-200 dark:text-gray-300 hover:bg-gray-700 dark:hover:bg-gray-600 rounded-md transition-colors"
                                     >
                                         <Plus className="w-4 h-4" />
                                         New Chat
                                     </button>
-                                    <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
+                                    <div className="border-t border-gray-600 dark:border-gray-600 my-2"></div>
                                     {safeChats.map((chat) => (
                                         <button
                                             key={chat.id}
                                             onClick={() => handleSelectChat(chat.id)}
                                             className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${chat.id === currentChatId
-                                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                                                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                                                    ? 'bg-blue-600 text-blue-100 dark:bg-blue-700 dark:text-blue-200'
+                                                    : 'text-gray-200 dark:text-gray-300 hover:bg-gray-700 dark:hover:bg-gray-600'
                                                 }`}
                                         >
                                             <span className="truncate">{chat.title}</span>
-                                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                                            <span className="text-xs text-gray-400 dark:text-gray-400">
                                                 {chat.message_count || 0}
                                             </span>
                                         </button>
@@ -495,13 +506,14 @@ function ChatInterface({
                             ))}
                         </div>
                     </div>) : (
-                    <>
-                        {safeMessages.map((msg, index) => (
+                    <>                        {safeMessages.map((msg, index) => (
                             <ChatMessage
                                 key={index}
                                 message={msg.content}
                                 isUser={msg.isUser}
                                 timestamp={msg.timestamp}
+                                repoId={repoId}
+                                userAvatar={user?.github_avatar}
                             />
                         ))}
 
@@ -565,7 +577,8 @@ ChatInterface.defaultProps = {
     availableFiles: [],
     isLoading: false,
     isMaximized: false,
-    onToggleMaximize: null
+    onToggleMaximize: null,
+    user: null
 }
 
 export default ChatInterface

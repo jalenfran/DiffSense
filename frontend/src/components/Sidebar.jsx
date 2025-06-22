@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Search, Star, Lock, Globe, Plus, LogOut, User, GitBranch, X, Loader2, Moon, Sun } from 'lucide-react'
+import { Search, Star, Plus, LogOut, User, GitBranch, X, Loader2, Moon, Sun } from 'lucide-react'
 import { useDarkMode } from '../contexts/DarkModeContext'
 import { diffSenseAPI } from '../services/api'
 
@@ -161,37 +161,30 @@ function Sidebar({
                                 ? 'bg-primary-50 dark:bg-primary-900/30 border-primary-200 dark:border-primary-700 border'
                                 : 'hover:bg-gray-50 dark:hover:bg-gray-700'
                                 }`}
-                        >
-                            <div className="flex items-center justify-between">
-                                <div className="flex-1 min-w-0">                                    <div className="flex items-center gap-2">
-                                    <h3 className="font-medium text-gray-900 dark:text-white truncate text-sm">
-                                        {repo.name}
-                                    </h3>
-                                    {selectedRepo?.id === repo.id && isRepositoryLoading && (
-                                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
-                                    )}
-                                    {repo.private ? (
-                                        <Lock className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                                    ) : (
-                                        <Globe className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                                    )}
-                                </div>
-                                </div>
-
-                                <div className="flex items-center gap-1">
+                        >                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             onToggleFavorite(repo.id)
                                         }}
-                                        className={`p-1 rounded transition-colors ${favorites.includes(repo.id)
+                                        className={`p-1 rounded transition-colors flex-shrink-0 ${favorites.includes(repo.id)
                                             ? 'text-yellow-500 hover:text-yellow-600'
                                             : 'text-gray-300 dark:text-gray-600 hover:text-yellow-400'
                                             }`}
                                     >
                                         <Star className={`w-3 h-3 ${favorites.includes(repo.id) ? 'fill-current' : ''}`} />
                                     </button>
+                                    
+                                    <h3 className="font-medium text-gray-900 dark:text-white truncate text-sm">
+                                        {repo.name}
+                                    </h3>
+                                    {selectedRepo?.id === repo.id && isRepositoryLoading && (
+                                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500 flex-shrink-0"></div>
+                                    )}
+                                </div>
 
+                                <div className="flex items-center gap-1">
                                     <button
                                         onClick={(e) => {
                                             e.stopPropagation()

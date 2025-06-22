@@ -19,7 +19,7 @@ export const RepositoryProvider = ({ children }) => {
     const [riskDashboard, setRiskDashboard] = useState(null)
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState(null)
-
+ 
     // Chat state - now using persistent chat system
     const [chats, setChats] = useState([])
     const [currentChatId, setCurrentChatId] = useState(null)
@@ -192,19 +192,30 @@ export const RepositoryProvider = ({ children }) => {
             chatId = newChat.id
         }
 
+        // Add user message immediately to the UI
+        const userMessage = {
+            content: message,
+            isUser: true,
+            timestamp: new Date().toISOString(),
+            id: `temp_${Date.now()}`
+        }
+        setCurrentChatMessages(prev => [...prev, userMessage])
+
         setIsChatLoading(true)
 
         try {
             // Send message and get response
             const response = await diffSenseAPI.sendChatMessage(chatId, message)
 
-            // Reload messages to get the latest state
+            // Reload messages to get the latest state (this will replace the temp message)
             await loadChatMessages(chatId)
 
             return response
 
         } catch (error) {
             console.error('Error sending chat message:', error)
+            // Remove the temporary user message on error
+            setCurrentChatMessages(prev => prev.filter(msg => msg.id !== userMessage.id))
             throw error
         } finally {
             setIsChatLoading(false)

@@ -135,23 +135,22 @@ export const diffSenseAPI = {
             use_auth: useAuth
         })
         return response.data
-    },
-
-    async getRepositoryFiles(repoId) {
-        const response = await api.get(`/repository/${repoId}/files`)
+    },    async getRepositoryFiles(repoId, options = {}) {
+        const params = {}
+        if (options.all_files) params.all_files = true
+        
+        const response = await api.get(`/repository/${repoId}/files`, { params })
         return response.data
     },
 
     async getRepositoryStats(repoId) {
         const response = await api.get(`/repository/${repoId}/stats`)
         return response.data
-    },
-
-    async getRepositoryCommits(repoId, limit = 50) {
+    },    async getRepositoryCommits(repoId, limit = 50) {
         const response = await api.get(`/repository/${repoId}/commits`, {
             params: { limit }
         })
-        return response.data
+        return response.data.commits || []
     },
 
     async cleanupRepository(repoId) {
@@ -176,6 +175,25 @@ export const diffSenseAPI = {
             include_claude_analysis: includeClaudeAnalysis
         })
         return response.data
+    },
+
+    // Advanced Breaking Change Analysis
+    async analyzeBreakingChanges(repoId, options = {}) {
+        try {
+            console.log('Analyzing breaking changes:', { repoId, options })
+            
+            const response = await api.post(`/repository/${repoId}/analyze-breaking-changes`, options)
+            
+            if (response.data) {
+                console.log('Breaking change analysis completed:', response.data)
+                return response.data
+            }
+            
+            throw new Error('No analysis data received')
+        } catch (error) {
+            console.error('Error analyzing breaking changes:', error)
+            throw error
+        }
     },
 
     // RAG Queries & Intelligent Search
@@ -276,12 +294,47 @@ export const diffSenseAPI = {
     async deleteChat(chatId) {
         const response = await api.delete(`/chats/${chatId}`)
         return response.data
-    },
-
-    async archiveChat(chatId) {
+    },    async archiveChat(chatId) {
         const response = await api.post(`/chats/${chatId}/archive`)
         return response.data
     },
+
+    // File Content Endpoints
+    async getFileContent(repoId, filePath, options = {}) {
+        const params = new URLSearchParams()
+        if (options.commitHash) params.append('commit_hash', options.commitHash)
+        if (options.showDiff) params.append('show_diff', 'true')
+        
+        const response = await api.get(`/repository/${repoId}/file/${encodeURIComponent(filePath)}?${params}`)
+        return response.data
+    },
+
+    async getFileHistory(repoId, filePath, options = {}) {
+        const params = new URLSearchParams()
+        if (options.limit) params.append('limit', options.limit)
+        if (options.showDiffs) params.append('show_diffs', 'true')
+        
+        const response = await api.get(`/repository/${repoId}/file-history/${encodeURIComponent(filePath)}?${params}`)
+        return response.data
+    },    // Commit Information Endpoints
+    async getCommitFiles(repoId, commitHash, options = {}) {
+        const params = new URLSearchParams()
+        if (options.includeDiffStats || options.include_diff_stats) params.append('include_diff_stats', 'true')
+        if (options.includeMetadata || options.include_metadata) params.append('include_metadata', 'true')
+        
+        const response = await api.get(`/repository/${repoId}/commit/${commitHash}/files?${params}`)
+        return response.data
+    },
+
+    async compareCommits(repoId, baseCommit, headCommit, options = {}) {
+        const params = new URLSearchParams()
+        if (options.filePath) params.append('file_path', options.filePath)
+        if (options.contextLines) params.append('context_lines', options.contextLines)
+        
+        const response = await api.get(`/repository/${repoId}/compare/${baseCommit}...${headCommit}?${params}`)
+        return response.data
+    },
+
     // Utility functions
     setSessionToken(token) {
         sessionToken = token
