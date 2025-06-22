@@ -16,7 +16,8 @@ function Sidebar({
     user,
     onLogout,
     setRepositories,
-    onCloseMobileSidebar
+    onCloseMobileSidebar,
+    isRepositoryLoading
 }) {
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
     const [showAddDialog, setShowAddDialog] = useState(false)
@@ -63,8 +64,7 @@ function Sidebar({
         window.location.href = 'http://localhost:3000/auth/logout'
         onLogout()
     }
-    
-    const handleAddRepository = async (repoData = null) => {
+      const handleAddRepository = async (repoData = null) => {
         setIsLoading(true)
         try {
             if (repoData) {
@@ -75,6 +75,9 @@ function Sidebar({
                 setRepositories(prev => [...prev, repoData])
                 setShowAddDialog(false)
                 setRepoSearchQuery('')
+                
+                // Immediately select and analyze the repository
+                onSelectRepo(repoData)
             } else {
                 // Adding from URL - create a mock repo object for the UI
                 if (!newRepoUrl.trim()) return
@@ -114,6 +117,9 @@ function Sidebar({
                 setRepositories(prev => [...prev, mockRepo])
                 setNewRepoUrl('')
                 setShowAddDialog(false)
+                
+                // Immediately select and analyze the repository
+                onSelectRepo(mockRepo)
             }
         } catch (error) {
             console.error('Failed to add repository:', error)
@@ -139,13 +145,12 @@ function Sidebar({
             'Kotlin': 'bg-purple-500',
             'Dart': 'bg-blue-400',
             'HTML': 'bg-orange-400',
-            'CSS': 'bg-blue-400'
-        }
+            'CSS': 'bg-blue-400'        }
         return colors[language] || 'bg-gray-400'
     }
 
     return (
-        <div className="w-80 sm:w-72 lg:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 h-screen flex flex-col duration-200 transition-colors">
+        <div className="w-80 sm:w-72 lg:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 h-full flex flex-col duration-200 transition-colors">
             {/* Header Section */}
             <div className="p-4 border-b border-gray-200 dark:border-gray-700 duration-200 transition-colors">
                 {/* Logo and Controls */}
@@ -251,11 +256,13 @@ function Sidebar({
                                 }`}
                         >
                             <div className="flex items-center justify-between">
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
+                                <div className="flex-1 min-w-0">                                    <div className="flex items-center gap-2">
                                         <h3 className="font-medium text-gray-900 dark:text-white truncate text-sm">
                                             {repo.name}
                                         </h3>
+                                        {selectedRepo?.id === repo.id && isRepositoryLoading && (
+                                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
+                                        )}
                                         {repo.private ? (
                                             <Lock className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
                                         ) : (

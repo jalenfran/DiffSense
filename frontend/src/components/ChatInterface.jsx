@@ -14,7 +14,9 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  ExternalLink
+  ExternalLink,
+  Maximize2,
+  X
 } from 'lucide-react'
 
 const ChatMessage = ({ message, isUser, timestamp }) => {
@@ -30,11 +32,10 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text)
   }
-
   const renderMessageContent = (content) => {
     if (typeof content === 'string') {
       return (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
+        <div className="max-w-none text-gray-900 dark:text-gray-100">
           <p className="whitespace-pre-wrap">{content}</p>
         </div>
       )
@@ -44,7 +45,7 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
     if (content.type === 'query_response') {
       return (
         <div className="space-y-4">
-          <div className="prose prose-sm dark:prose-invert max-w-none">
+          <div className="max-w-none text-gray-900 dark:text-gray-100">
             <p className="whitespace-pre-wrap">{content.response}</p>
           </div>
           
@@ -238,7 +239,17 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
   )
 }
 
-function ChatInterface({ repoId, onSendMessage, messages, isLoading, onFileSelect, selectedFiles, availableFiles }) {
+function ChatInterface({ 
+  repoId, 
+  onSendMessage, 
+  messages, 
+  isLoading, 
+  onFileSelect, 
+  selectedFiles, 
+  availableFiles, 
+  isMaximized = false, 
+  onToggleMaximize 
+}) {
   const [inputMessage, setInputMessage] = useState('')
   const [showFileSelector, setShowFileSelector] = useState(false)
   const messagesEndRef = useRef(null)
@@ -287,27 +298,44 @@ function ChatInterface({ repoId, onSendMessage, messages, isLoading, onFileSelec
     {
       label: "Security concerns",
       prompt: "Are there any security vulnerabilities or concerns in recent changes?",
-      icon: <Search className="w-4 h-4" />
-    }
+      icon: <Search className="w-4 h-4" />    }
   ]
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+    <div className={`flex flex-col h-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg transition-all duration-300 ease-in-out ${
+      isMaximized ? 'fixed inset-2 z-50 shadow-2xl' : ''
+    }`}>
       {/* Chat Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-blue-500" />
           <h3 className="font-medium text-gray-900 dark:text-white">Repository Chat</h3>
-        </div>        <button
-          onClick={() => setShowFileSelector(!showFileSelector)}
-          className={`text-sm px-3 py-1 rounded-lg transition-colors ${
-            safeSelectedFiles.length > 0
-              ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-              : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-          }`}
-        >
-          {safeSelectedFiles.length > 0 ? `${safeSelectedFiles.length} files selected` : 'Select files'}
-        </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowFileSelector(!showFileSelector)}
+            className={`text-sm px-3 py-1 rounded-lg transition-colors ${
+              safeSelectedFiles.length > 0
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+            }`}
+          >
+            {safeSelectedFiles.length > 0 ? `${safeSelectedFiles.length} files selected` : 'Select files'}
+          </button>
+          {onToggleMaximize && (
+            <button
+              onClick={onToggleMaximize}
+              className="p-2 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title={isMaximized ? 'Minimize chat' : 'Maximize chat'}
+            >
+              {isMaximized ? (
+                <X className="w-5 h-5" />
+              ) : (
+                <Maximize2 className="w-5 h-5" />
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* File Selector */}
@@ -396,11 +424,9 @@ function ChatInterface({ repoId, onSendMessage, messages, isLoading, onFileSelec
           </>
         )}
         <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
+      </div>      {/* Input */}
       <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex gap-2 items-end">
+        <div className="flex gap-2 items-start">
           <div className="flex-1">
             <textarea
               ref={inputRef}
@@ -410,7 +436,7 @@ function ChatInterface({ repoId, onSendMessage, messages, isLoading, onFileSelec
               placeholder="Ask about this repository..."
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400"
               rows={1}
-              style={{ minHeight: '38px', maxHeight: '120px' }}
+              style={{ minHeight: '42px', maxHeight: '120px' }}
               onInput={(e) => {
                 e.target.style.height = 'auto'
                 e.target.style.height = e.target.scrollHeight + 'px'
@@ -420,11 +446,11 @@ function ChatInterface({ repoId, onSendMessage, messages, isLoading, onFileSelec
           <button
             onClick={handleSendMessage}
             disabled={!inputMessage.trim() || isLoading}
-            className="px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors disabled:cursor-not-allowed flex items-center gap-2"
+            className="h-[42px] px-4 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 text-white rounded-lg transition-colors disabled:cursor-not-allowed flex items-center gap-2 flex-shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>
-        </div>        
+        </div>
         {safeSelectedFiles.length > 0 && (
           <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
             Context: {safeSelectedFiles.length} file{safeSelectedFiles.length !== 1 ? 's' : ''} selected
@@ -440,7 +466,9 @@ ChatInterface.defaultProps = {
   messages: [],
   selectedFiles: [],
   availableFiles: [],
-  isLoading: false
+  isLoading: false,
+  isMaximized: false,
+  onToggleMaximize: null
 }
 
 export default ChatInterface

@@ -16,7 +16,7 @@ function Dashboard({ user, onLogout }) {
     const [searchQuery, setSearchQuery] = useState('')
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 
-    const { selectRepository, selectedRepo } = useRepository()
+    const { selectRepository, selectedRepo, isLoading: isRepositoryLoading } = useRepository()
 
     useEffect(() => {
         localStorage.setItem('diffsense-favorites', JSON.stringify(favorites))
@@ -101,13 +101,12 @@ function Dashboard({ user, onLogout }) {
 
         // If only one is in recently viewed, prioritize it
         if (aRecentIndex !== -1) return -1
-        if (bRecentIndex !== -1) return 1
-        // If neither is in recently viewed, sort by updated date
+        if (bRecentIndex !== -1) return 1        // If neither is in recently viewed, sort by updated date
         return new Date(b.updated_at) - new Date(a.updated_at)
     })
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative">
+        <div className="h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative overflow-hidden">
             {/* Mobile sidebar overlay */}
             {isMobileSidebarOpen && (
                 <div 
@@ -121,9 +120,8 @@ function Dashboard({ user, onLogout }) {
                 fixed lg:relative lg:translate-x-0 z-50 lg:z-auto
                 transform transition-transform duration-300 ease-in-out
                 ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-                lg:flex lg:flex-shrink-0
-            `}>
-                <Sidebar
+                lg:flex lg:flex-shrink-0 h-full
+            `}><Sidebar
                     repositories={sortedRepositories}
                     selectedRepo={selectedRepo}
                     onSelectRepo={handleSelectRepo}
@@ -137,11 +135,10 @@ function Dashboard({ user, onLogout }) {
                     onLogout={onLogout}
                     setRepositories={setRepositories}
                     onCloseMobileSidebar={() => setIsMobileSidebarOpen(false)}
+                    isRepositoryLoading={isRepositoryLoading}
                 />
-            </div>
-
-            {/* Main content area */}
-            <div className="flex-1 flex flex-col min-w-0">                <MainContent
+            </div>            {/* Main content area */}
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent
                     user={user}
                     onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
                     isMobileSidebarOpen={isMobileSidebarOpen}

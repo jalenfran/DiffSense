@@ -82,47 +82,44 @@ function LandingPage() {
 
                 {/* Features */}
                 <div className="py-20">
-                    <div className="grid md:grid-cols-3 gap-8">
-                        <div className="card text-center">
-                            <div className="bg-primary-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <Search className="w-8 h-8 text-primary-600" />
+                    <div className="grid md:grid-cols-3 gap-8">                        <div className="card text-center">
+                            <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <Search className="w-8 h-8 text-primary-600 dark:text-primary-400" />
                             </div>
-                            <h3 className="text-xl font-semibold mb-3">Smart Analysis</h3>
-                            <p className="text-gray-600">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-900 dark:text-white">Smart Analysis</h3>
+                            <p className="text-gray-600 dark:text-gray-300">
                                 Advanced algorithms analyze your code changes to provide meaningful insights
                                 and patterns in your development process.
                             </p>
                         </div>
 
                         <div className="card text-center">
-                            <div className="bg-primary-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <GitBranch className="w-8 h-8 text-primary-600" />
+                            <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <GitBranch className="w-8 h-8 text-primary-600 dark:text-primary-400" />
                             </div>
-                            <h3 className="text-xl font-semibold mb-3">Repository Insights</h3>
-                            <p className="text-gray-600">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-900 dark:text-white">Repository Insights</h3>
+                            <p className="text-gray-600 dark:text-gray-300">
                                 Get detailed insights into your repositories including commit patterns,
                                 file changes, and development trends over time.
                             </p>
                         </div>
 
                         <div className="card text-center">
-                            <div className="bg-primary-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <Zap className="w-8 h-8 text-primary-600" />
+                            <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <Zap className="w-8 h-8 text-primary-600 dark:text-primary-400" />
                             </div>
-                            <h3 className="text-xl font-semibold mb-3">Real-time Updates</h3>
-                            <p className="text-gray-600">
+                            <h3 className="text-xl font-semibold mb-3 text-gray-900 dark:text-white">Real-time Updates</h3>
+                            <p className="text-gray-600 dark:text-gray-300">
                                 Stay up-to-date with real-time analysis of your latest commits
                                 and changes across all your repositories.
                             </p>
                         </div>
                     </div>
                 </div>
-            </main>
-
-            {/* Footer */}
-            <footer className="border-t border-gray-200 mt-20">
+            </main>            {/* Footer */}
+            <footer className="border-t border-gray-200 dark:border-gray-700 mt-20">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-                    <div className="text-center text-gray-500">
+                    <div className="text-center text-gray-500 dark:text-gray-400">
                         <p>&copy; 2025 DiffSense. Analyze your code changes with confidence.</p>
                     </div>
                 </div>
