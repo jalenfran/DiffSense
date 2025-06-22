@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import MainContent from './MainContent'
-import axios from 'axios'
+import { useRepository } from '../contexts/RepositoryContext'
 
 function Dashboard({ user, onLogout }) {
     const [repositories, setRepositories] = useState([])
-    const [selectedRepo, setSelectedRepo] = useState(null)
     const [favorites, setFavorites] = useState(() => {
         const saved = localStorage.getItem('diffsense-favorites')
         return saved ? JSON.parse(saved) : []
@@ -16,6 +15,8 @@ function Dashboard({ user, onLogout }) {
     })
     const [searchQuery, setSearchQuery] = useState('')
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+
+    const { selectRepository, selectedRepo, isLoading: isRepositoryLoading } = useRepository()
 
     useEffect(() => {
         localStorage.setItem('diffsense-favorites', JSON.stringify(favorites))
@@ -38,7 +39,7 @@ function Dashboard({ user, onLogout }) {
     }, [])
 
     const handleSelectRepo = (repo) => {
-        setSelectedRepo(repo)
+        selectRepository(repo)
         setIsMobileSidebarOpen(false) // Close mobile sidebar when repo is selected
 
         // Update recently viewed list
@@ -57,17 +58,12 @@ function Dashboard({ user, onLogout }) {
     }
 
     const handleAddRepository = async (owner, repoName) => {
+        // This is kept for compatibility with the browse functionality
+        // The URL functionality is now handled in the Sidebar component
         try {
-            // Fetch repository details from GitHub API
-            const response = await axios.get(`/repos/${owner}/${repoName}/stats`)
-            const repoData = response.data.repository
-
-            // Check if repo already exists
-            if (repositories.some(repo => repo.id === repoData.id)) {
-                throw new Error('Repository already added')
-            }
-
-            setRepositories(prev => [...prev, repoData])
+            // Fetch repository details from GitHub API (if needed for browse mode)
+            // For now, this is just a placeholder
+            console.log('Adding repository:', owner, repoName)
         } catch (error) {
             console.error('Error adding repository:', error)
             throw error
@@ -105,13 +101,12 @@ function Dashboard({ user, onLogout }) {
 
         // If only one is in recently viewed, prioritize it
         if (aRecentIndex !== -1) return -1
-        if (bRecentIndex !== -1) return 1
-        // If neither is in recently viewed, sort by updated date
+        if (bRecentIndex !== -1) return 1        // If neither is in recently viewed, sort by updated date
         return new Date(b.updated_at) - new Date(a.updated_at)
     })
 
     return (
-        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative">
+        <div className="h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative overflow-hidden">
             {/* Mobile sidebar overlay */}
             {isMobileSidebarOpen && (
                 <div 
@@ -125,9 +120,8 @@ function Dashboard({ user, onLogout }) {
                 fixed lg:relative lg:translate-x-0 z-50 lg:z-auto
                 transform transition-transform duration-300 ease-in-out
                 ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-                lg:flex lg:flex-shrink-0
-            `}>
-                <Sidebar
+                lg:flex lg:flex-shrink-0 h-full
+            `}><Sidebar
                     repositories={sortedRepositories}
                     selectedRepo={selectedRepo}
                     onSelectRepo={handleSelectRepo}
@@ -141,13 +135,10 @@ function Dashboard({ user, onLogout }) {
                     onLogout={onLogout}
                     setRepositories={setRepositories}
                     onCloseMobileSidebar={() => setIsMobileSidebarOpen(false)}
+                    isRepositoryLoading={isRepositoryLoading}
                 />
-            </div>
-
-            {/* Main content area */}
-            <div className="flex-1 flex flex-col min-w-0">
-                <MainContent
-                    selectedRepo={selectedRepo}
+            </div>            {/* Main content area */}
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent
                     user={user}
                     onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
                     isMobileSidebarOpen={isMobileSidebarOpen}
