@@ -31,9 +31,10 @@ class QueryResult:
 class RepositoryKnowledgeBase:
     """Smart context gatherer that feeds Claude with perfect information"""
     
-    def __init__(self, git_analyzer, embedding_engine=None):
+    def __init__(self, git_analyzer, embedding_engine=None, claude_analyzer=None):
         self.git_analyzer = git_analyzer
         self.embedding_engine = embedding_engine
+        self.claude_analyzer = claude_analyzer
     
     def query(self, repo_id: str, query: str, max_results: int = 5) -> QueryResult:
         """Main entry: analyze query and gather perfect context"""
@@ -61,7 +62,40 @@ class RepositoryKnowledgeBase:
         # Calculate confidence based on context quality
         confidence = self._calculate_confidence(context, query)
         
-        # Create response from context
+        # Actually use Claude for analysis if available
+        if self.claude_analyzer and self.claude_analyzer.available:
+            try:
+                # Create SmartContext for Claude
+                from src.claude_analyzer import SmartContext
+                
+                claude_context = SmartContext(
+                    query=query,
+                    query_type=query_type,
+                    files=context.get('files', []),
+                    commits=context.get('commits', []),
+                    repo_context=self._get_repo_context(repo_id),
+                    confidence=confidence,
+                    reasoning=context.get('reasoning', f'{query_type} analysis')
+                )
+                
+                # Get Claude's enhanced analysis
+                claude_response = self.claude_analyzer.analyze(claude_context)
+                
+                # Use Claude's response instead of the basic template
+                return QueryResult(
+                    query=claude_response.query,
+                    response=claude_response.response,
+                    confidence=claude_response.confidence,
+                    sources=claude_response.sources,
+                    context_used=claude_response.context_used,
+                    suggestions=claude_response.suggestions
+                )
+                
+            except Exception as e:
+                logger.warning(f"Claude analysis failed, falling back to basic response: {e}")
+                # Fall through to basic response
+        
+        # Create basic response from context (fallback when Claude not available or fails)
         response_parts = [
             f"# 📊 Smart Analysis Results",
             f"",
@@ -101,8 +135,13 @@ class RepositoryKnowledgeBase:
             f"Context gathered successfully with {confidence:.0%} confidence.",
             f"Reasoning: {context.get('reasoning', 'General analysis')}",
             f"",
-            f"*Configure Claude API for enhanced AI analysis.*"
         ])
+        
+        # Only add Claude configuration message if Claude is not available
+        if not self.claude_analyzer or not self.claude_analyzer.available:
+            response_parts.append(f"*Configure Claude API for enhanced AI analysis.*")
+        else:
+            response_parts.append(f"*Analysis enhanced with Claude AI.*")
         
         # Create sources
         sources = []
@@ -123,7 +162,12 @@ class RepositoryKnowledgeBase:
             })
         
         # Create suggestions
-        suggestions = ["Configure Claude API for AI-powered analysis"]
+        suggestions = []
+        if self.claude_analyzer and not self.claude_analyzer.available:
+            suggestions.append("Configure Claude API for AI-powered analysis")
+        elif not self.claude_analyzer:
+            suggestions.append("Configure Claude API for AI-powered analysis")
+        
         if context.get('files'):
             suggestions.append(f"Review the {len(context['files'])} relevant files")
         if context.get('commits'):

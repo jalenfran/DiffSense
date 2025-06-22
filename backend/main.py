@@ -1,16 +1,19 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, HttpUrl
 from typing import List, Dict, Any, Optional, Union
 import tempfile
 import shutil
 import os
 import subprocess
+import secrets
 from datetime import datetime, timedelta
 import json
 import traceback
 import logging
 import numpy as np
+import uuid
 from dotenv import load_dotenv
 from dataclasses import asdict
 
@@ -35,14 +38,40 @@ def convert_numpy_types(obj):
         return [convert_numpy_types(item) for item in obj]
     return obj
 
+def _parse_context_used(context_used_str: str) -> List[Dict[str, Any]]:
+    """Parse context_used string into list of dictionaries for ChatMessageResponse"""
+    if not context_used_str:
+        return []
+    
+    try:
+        # Try to parse as JSON first
+        parsed = json.loads(context_used_str)
+        if isinstance(parsed, list):
+            # Convert list items to dictionaries if they're strings
+            result = []
+            for item in parsed:
+                if isinstance(item, str):
+                    result.append({"content": item})
+                elif isinstance(item, dict):
+                    result.append(item)
+                else:
+                    result.append({"content": str(item)})
+            return result
+        else:
+            return [{"content": str(parsed)}]
+    except json.JSONDecodeError:
+        # If not valid JSON, treat as plain string
+        return [{"content": context_used_str}]
+
 from src.config import config
 from src.git_analyzer import GitAnalyzer
 from src.breaking_change_detector import BreakingChangeDetector, CommitBreakingChangeAnalysis
 from src.rag_system import RepositoryKnowledgeBase
 from src.claude_analyzer import ClaudeAnalyzer, SmartContext
 from src.embedding_engine import SemanticAnalyzer, TextEmbedder, CodeEmbedder
-from src.database import DatabaseManager
+from src.database import DatabaseManager, User, Chat, ChatMessage, Commit, Repository, CommitAnalysis, RepositoryDashboard
 from src.storage_manager import RepositoryStorageManager
+from src.github_service import GitHubService
 
 app = FastAPI(title="DiffSense API", description="Semantic drift detection for git repositories")
 
@@ -55,13 +84,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request models
-class AnalyzeRepositoryRequest(BaseModel):
-    repo_url: HttpUrl
-    file_path: Optional[str] = None
-    function_name: Optional[str] = None
-    max_commits: int = 50
-
+# Core request models
 class AnalyzeCommitRequest(BaseModel):
     commit_hash: str
     include_claude_analysis: bool = True
@@ -70,27 +93,86 @@ class AnalyzeCommitRangeRequest(BaseModel):
     start_commit: str
     end_commit: str
     max_commits: int = 100
-    include_claude_analysis: bool = False  # Disabled by default for cleaner responses
+    include_claude_analysis: bool = False
 
 class QueryRepositoryRequest(BaseModel):
     query: str
     max_results: int = 10
-    include_claude_response: bool = False  # Disabled by default for cleaner responses
-
-class AnalyzeFileRequest(BaseModel):
-    repo_path: str
-    file_path: str
-    max_commits: int = 50
-
-class AnalyzeFunctionRequest(BaseModel):
-    repo_path: str
-    file_path: str
-    function_name: str
-    max_commits: int = 30
 
 class QueryRequest(BaseModel):
     query: str
     max_results: int = 10
+
+# Legacy models (kept for backwards compatibility but will be deprecated)
+class AnalyzeFileRequest(BaseModel):
+    file_path: str
+    max_commits: int = 50
+
+class AnalyzeFunctionRequest(BaseModel):
+    file_path: str
+    function_name: str
+    max_commits: int = 50
+
+# Authentication models
+class GitHubOAuthRequest(BaseModel):
+    code: str
+    state: str
+
+class UserResponse(BaseModel):
+    id: str
+    github_username: str
+    github_avatar: str
+    github_email: Optional[str]
+    display_name: str
+    created_at: str
+    last_login: str
+
+class GitHubRepositoryResponse(BaseModel):
+    id: str
+    name: str
+    full_name: str
+    clone_url: str
+    private: bool
+    description: Optional[str]
+    language: Optional[str]
+    default_branch: str
+
+# Chat models
+class CreateChatRequest(BaseModel):
+    repo_id: Optional[str] = None
+    title: str = "New Chat"
+
+class ChatResponse(BaseModel):
+    id: str
+    user_id: str
+    repo_id: Optional[str]
+    title: str
+    created_at: str
+    updated_at: str
+    is_archived: bool
+    message_count: int
+
+class ChatMessageRequest(BaseModel):
+    chat_id: str
+    message: str
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    chat_id: str
+    user_id: str
+    message: str
+    response: str
+    query_type: str
+    context_used: List[Dict[str, Any]]
+    confidence: float
+    timestamp: str
+    claude_enhanced: bool
+
+class UpdateChatTitleRequest(BaseModel):
+    title: str
+
+class CloneRepositoryRequest(BaseModel):
+    repo_url: HttpUrl
 
 # Response models
 class BreakingChangeResponse(BaseModel):
@@ -164,9 +246,10 @@ from src.storage_manager import RepositoryStorageManager
 
 # Initialize global services
 semantic_analyzer = SemanticAnalyzer()
-rag_system = RepositoryKnowledgeBase(semantic_analyzer)
 claude_analyzer = ClaudeAnalyzer()
+rag_system = RepositoryKnowledgeBase(semantic_analyzer, claude_analyzer=claude_analyzer)
 breaking_change_detector = BreakingChangeDetector(semantic_analyzer)
+github_service = GitHubService()
 
 # Initialize database and storage
 db_manager = DatabaseManager()
@@ -175,6 +258,66 @@ storage_manager = RepositoryStorageManager()
 # Legacy in-memory storage for backwards compatibility
 active_repos: Dict[str, GitAnalyzer] = {}
 temp_dirs: Dict[str, str] = {}
+
+# Session management
+user_sessions: Dict[str, str] = {}  # session_id -> user_id mapping
+
+# Authentication utilities
+def generate_session_id() -> str:
+    """Generate a secure session ID"""
+    return secrets.token_urlsafe(32)
+
+async def get_current_user(authorization: str = Header(None)) -> Optional[str]:
+    """Get current user from authorization header"""
+    if not authorization:
+        return None
+    
+    if authorization.startswith("Bearer "):
+        session_id = authorization[7:]  # Remove "Bearer " prefix
+        return user_sessions.get(session_id)
+    
+    return None
+
+async def require_auth(current_user: Optional[str] = Depends(get_current_user)) -> str:
+    """Require authentication for endpoints"""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return current_user
+
+# Startup event handler to load existing repositories
+@app.on_event("startup")
+async def startup_event():
+    """Load existing repositories from database into active_repos on startup"""
+    try:
+        logger.info("Loading existing repositories from database...")
+        
+        # Get all repositories from database
+        repositories = db_manager.list_repositories()
+        
+        for repo in repositories:
+            try:
+                # Check if the repository path still exists
+                if os.path.exists(repo.local_path):
+                    # Initialize GitAnalyzer for existing repository
+                    git_analyzer = GitAnalyzer(repo.local_path)
+                    
+                    # Add to active repos
+                    active_repos[repo.id] = git_analyzer
+                    
+                    logger.info(f"Loaded repository: {repo.name} ({repo.id})")
+                else:
+                    logger.warning(f"Repository path does not exist, skipping: {repo.local_path}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to load repository {repo.name} ({repo.id}): {e}")
+                continue
+        
+        logger.info(f"Successfully loaded {len(active_repos)} repositories into active_repos")
+        
+    except Exception as e:
+        logger.error(f"Error during startup repository loading: {e}")
+        # Don't fail startup if repository loading fails
+        pass
 
 @app.get("/")
 async def root():
@@ -186,12 +329,45 @@ async def root():
     }
 
 @app.post("/api/clone-repository")
-async def clone_repository(request: AnalyzeRepositoryRequest, background_tasks: BackgroundTasks):
+async def clone_repository(
+    request: CloneRepositoryRequest, 
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(require_auth)
+):
     """Clone a repository and return basic stats"""
     try:
         print(f"Received request: {request}")
         repo_url_str = str(request.repo_url)
         print(f"Repository URL: {repo_url_str}")
+        
+        # Normalize URL for comparison
+        normalized_url = normalize_repository_url(repo_url_str)
+        
+        # Check if user already has this repository
+        user_repositories = db_manager.get_user_repositories(current_user)
+        for repo in user_repositories:
+            if normalize_repository_url(repo.url) == normalized_url:
+                raise HTTPException(
+                    status_code=409, 
+                    detail=f"Repository already exists for this user: {repo.name} (ID: {repo.id})"
+                )
+        
+        # Require authenticated user
+        authenticated_url = repo_url_str
+        user = db_manager.get_user(current_user)
+        
+        # If user is authenticated, try to use OAuth token for private repos
+        if user and github_service.available:
+            try:
+                access_token = github_service.decrypt_token(user.access_token)
+                
+                if github_service.validate_repository_access(access_token, repo_url_str):
+                    authenticated_url = github_service.create_authenticated_clone_url(access_token, repo_url_str)
+                    print("Using authenticated URL for private repository")
+                else:
+                    print("Repository access validation failed, trying public access")
+            except Exception as e:
+                print(f"Authentication failed, trying public access: {e}")
         
         # Generate repository ID and setup storage
         repo_id = storage_manager.generate_repo_id(repo_url_str)
@@ -201,33 +377,53 @@ async def clone_repository(request: AnalyzeRepositoryRequest, background_tasks: 
         existing_repo = db_manager.get_repository_by_url(repo_url_str)
         if existing_repo and os.path.exists(repo_path):
             print(f"Repository already exists: {repo_id}")
+            
+            # Link to user if authenticated
+            if user:
+                db_manager.link_repository_to_user(repo_id, user.id)
+            
             # Load existing repository
             git_analyzer = GitAnalyzer(repo_path)
             active_repos[repo_id] = git_analyzer
             
             # Get repository stats
             stats = git_analyzer.analyze_repository_stats()
+            print(f"Got repository stats for existing repo: {stats}")
             
             return {
                 "repo_id": repo_id,
                 "status": "loaded_existing",
                 "stats": RepositoryStatsResponse(**stats),
-                "message": f"Loaded existing repository from {repo_url_str}"
+                "message": f"Repository already exists and loaded successfully"
             }
         
         # Clone repository to organized storage
         print(f"Cloning to: {repo_path}")
-        git_analyzer = GitAnalyzer.clone_repository(repo_url_str, repo_path)
+        git_analyzer = GitAnalyzer.clone_repository(authenticated_url, repo_path)
         print(f"Successfully created GitAnalyzer")
+        
+        # Link to user if authenticated
+        if user:
+            db_manager.link_repository_to_user(repo_id, user.id)
         
         # Store repository in database
         if not existing_repo:
-            db_manager.add_repository(
+            # Save repository metadata
+            from src.database import Repository
+            repository = Repository(
+                id=repo_id,
                 url=repo_url_str,
                 name=repo_id,
-                storage_path=repo_path,
-                last_analyzed=datetime.now()
+                local_path=repo_path,
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+                user_id=current_user,  # Link repository to the authenticated user
+                total_commits=0,
+                total_files=0,
+                primary_language="",
+                status="active"
             )
+            db_manager.save_repository(repository)
         
         # Store in global state for API access
         active_repos[repo_id] = git_analyzer
@@ -264,18 +460,301 @@ async def clone_repository(request: AnalyzeRepositoryRequest, background_tasks: 
         
         raise HTTPException(status_code=400, detail=f"Failed to clone repository: {str(e)}")
 
+# ===== CHAT SYSTEM ENDPOINTS =====
+
+@app.post("/api/chats")
+async def create_chat(request: CreateChatRequest, current_user: str = Depends(require_auth)):
+    """Create a new chat conversation"""
+    try:
+        chat_id = f"chat_{secrets.token_urlsafe(16)}"
+        now = datetime.now().isoformat()
+        
+        chat = Chat(
+            id=chat_id,
+            user_id=current_user,
+            repo_id=request.repo_id,
+            title=request.title,
+            created_at=now,
+            updated_at=now,
+            is_archived=False
+        )
+        
+        if not db_manager.save_chat(chat):
+            raise HTTPException(status_code=500, detail="Failed to create chat")
+        
+        return ChatResponse(
+            id=chat.id,
+            user_id=chat.user_id,
+            repo_id=chat.repo_id,
+            title=chat.title,
+            created_at=chat.created_at,
+            updated_at=chat.updated_at,
+            is_archived=chat.is_archived,
+            message_count=0
+        )
+        
+    except Exception as e:
+        logger.error(f"Error creating chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create chat")
+
+@app.get("/api/chats")
+async def get_user_chats(
+    current_user: str = Depends(require_auth),
+    include_archived: bool = Query(False, description="Include archived chats")
+):
+    """Get user's chat conversations"""
+    try:
+        chats = db_manager.get_user_chats(current_user, include_archived)
+        
+        return [
+            ChatResponse(
+                id=chat.id,
+                user_id=chat.user_id,
+                repo_id=chat.repo_id,
+                title=chat.title,
+                created_at=chat.created_at,
+                updated_at=chat.updated_at,
+                is_archived=chat.is_archived,
+                message_count=len(db_manager.get_chat_messages(chat.id))
+            )
+            for chat in chats
+        ]
+        
+    except Exception as e:
+        logger.error(f"Error getting chats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get chats")
+
+@app.get("/api/chats/{chat_id}")
+async def get_chat(chat_id: str, current_user: str = Depends(require_auth)):
+    """Get chat details and messages"""
+    try:
+        chat = db_manager.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        if chat.user_id != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        messages = db_manager.get_chat_messages(chat_id)
+        
+        return {
+            "chat": ChatResponse(
+                id=chat.id,
+                user_id=chat.user_id,
+                repo_id=chat.repo_id,
+                title=chat.title,
+                created_at=chat.created_at,
+                updated_at=chat.updated_at,
+                is_archived=chat.is_archived,
+                message_count=len(messages)
+            ),
+            "messages": [
+                ChatMessageResponse(
+                    id=msg.id,
+                    chat_id=msg.chat_id,
+                    user_id=msg.user_id,
+                    message=msg.message,
+                    response=msg.response,
+                    query_type=msg.query_type,
+                    context_used=_parse_context_used(msg.context_used),
+                    confidence=msg.confidence,
+                    timestamp=msg.timestamp,
+                    claude_enhanced=msg.claude_enhanced
+                )
+                for msg in messages
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get chat")
+
+@app.post("/api/chats/{chat_id}/messages")
+async def send_chat_message(
+    chat_id: str, 
+    request: ChatMessageRequest, 
+    current_user: str = Depends(require_auth)
+):
+    """Send a message to a chat and get AI response"""
+    try:
+        # Verify chat exists and user has access
+        chat = db_manager.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        if chat.user_id != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Process query with RAG system
+        if chat.repo_id and chat.repo_id in active_repos:
+            # Repository-specific query - create RAG system with specific git_analyzer
+            git_analyzer = active_repos[chat.repo_id]
+            repo_rag_system = RepositoryKnowledgeBase(git_analyzer, claude_analyzer=claude_analyzer)
+            rag_result = repo_rag_system.query(chat.repo_id, request.message, max_results=10)
+            query_type = "repository"
+            claude_enhanced = True  # RAG system doesn't track this, only enhanced endpoints do
+        else:
+            # General query (fallback response)
+            rag_result = RepositoryQueryResponse(
+                query=request.message,
+                response="I'm ready to help analyze repositories once you've cloned one.",
+                confidence=1.0,
+                sources=[],
+                context_used=[],
+                suggestions=["Clone a repository first using the /api/clone-repository endpoint"],
+                claude_enhanced=False
+            )
+            query_type = "general"
+            claude_enhanced = False
+        
+        # Save message and response
+        message_id = f"msg_{secrets.token_urlsafe(16)}"
+        now = datetime.now().isoformat()
+        
+        # Ensure context_used is a list of dictionaries for ChatMessageResponse
+        context_used = getattr(rag_result, 'context_used', [])
+        if isinstance(context_used, str):
+            # If it's a string, wrap it in a list or try to parse it
+            try:
+                context_used = json.loads(context_used) if context_used.startswith('[') else [{"content": context_used}]
+            except:
+                context_used = [{"content": context_used}] if context_used else []
+        elif isinstance(context_used, list):
+            # Convert list of strings to list of dictionaries
+            formatted_context = []
+            for item in context_used:
+                if isinstance(item, str):
+                    formatted_context.append({"content": item})
+                elif isinstance(item, dict):
+                    formatted_context.append(item)
+                else:
+                    formatted_context.append({"content": str(item)})
+            context_used = formatted_context
+        else:
+            context_used = []
+        
+        chat_message = ChatMessage(
+            id=message_id,
+            chat_id=chat_id,
+            user_id=current_user,
+            message=request.message,
+            response=rag_result.response,
+            query_type=query_type,
+            context_used=json.dumps(context_used),
+            confidence=getattr(rag_result, 'confidence', 1.0),
+            timestamp=now,
+            claude_enhanced=claude_enhanced
+        )
+        
+        if not db_manager.save_chat_message(chat_message):
+            raise HTTPException(status_code=500, detail="Failed to save message")
+        
+        # Update chat timestamp
+        db_manager.update_chat_timestamp(chat_id)
+        
+        return ChatMessageResponse(
+            id=chat_message.id,
+            chat_id=chat_message.chat_id,
+            user_id=chat_message.user_id,
+            message=chat_message.message,
+            response=chat_message.response,
+            query_type=chat_message.query_type,
+            context_used=context_used,  # Use the already parsed context_used
+            confidence=chat_message.confidence,
+            timestamp=chat_message.timestamp,
+            claude_enhanced=chat_message.claude_enhanced
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send message")
+
+@app.put("/api/chats/{chat_id}")
+async def update_chat(
+    chat_id: str, 
+    request: UpdateChatTitleRequest, 
+    current_user: str = Depends(require_auth)
+):
+    """Update chat title"""
+    try:
+        chat = db_manager.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        if chat.user_id != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not db_manager.update_chat_title(chat_id, request.title):
+            raise HTTPException(status_code=500, detail="Failed to update chat")
+        
+        return {"message": "Chat title updated successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update chat")
+
+@app.delete("/api/chats/{chat_id}")
+async def delete_chat(chat_id: str, current_user: str = Depends(require_auth)):
+    """Delete a chat conversation"""
+    try:
+        chat = db_manager.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        if chat.user_id != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not db_manager.delete_chat(chat_id):
+            raise HTTPException(status_code=500, detail="Failed to delete chat")
+        
+        return {"message": "Chat deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete chat")
+
+@app.post("/api/chats/{chat_id}/archive")
+async def archive_chat(chat_id: str, current_user: str = Depends(require_auth)):
+    """Archive a chat conversation"""
+    try:
+        chat = db_manager.get_chat(chat_id)
+        if not chat:
+            raise HTTPException(status_code=404, detail="Chat not found")
+        
+        if chat.user_id != current_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not db_manager.archive_chat(chat_id):
+            raise HTTPException(status_code=500, detail="Failed to archive chat")
+        
+        return {"message": "Chat archived successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error archiving chat: {e}")
+        raise HTTPException(status_code=500, detail="Failed to archive chat")
+
+# ===== LEGACY ENDPOINTS (DEPRECATED) =====
+
 @app.post("/api/analyze-file/{repo_id}")
 async def analyze_file_drift(repo_id: str, request: AnalyzeFileRequest):
-    """Analyze semantic drift for a specific file"""
+    """[DEPRECATED] Analyze semantic drift for a specific file - use enhanced query endpoints instead"""
+    logger.warning("analyze-file endpoint is deprecated. Use /api/repository/{repo_id}/file/{file_path}/insights instead")
+    
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found. Please clone first.")
         
         git_analyzer = active_repos[repo_id]
-        
-        # TODO: Re-enable drift analysis once transformers issue is resolved
-        # detector = DriftDetector(git_analyzer)
-        # feature_history = detector.analyze_file_drift(request.file_path, request.max_commits)
         
         # For now, return basic file information
         commits = git_analyzer.get_commits_for_file(request.file_path, request.max_commits)
@@ -290,7 +769,9 @@ async def analyze_file_drift(repo_id: str, request: AnalyzeFileRequest):
             "drift_events": [],
             "change_summary": {"total_changes": len(commits)},
             "timeline": [],
-            "risk_assessment": {"risk_level": "unknown"}
+            "risk_assessment": {"risk_level": "unknown"},
+            "deprecated": True,
+            "recommended_endpoint": f"/api/repository/{repo_id}/file/{request.file_path}/insights"
         }
         
     except ValueError as e:
@@ -300,20 +781,14 @@ async def analyze_file_drift(repo_id: str, request: AnalyzeFileRequest):
 
 @app.post("/api/analyze-function/{repo_id}")
 async def analyze_function_drift(repo_id: str, request: AnalyzeFunctionRequest):
-    """Analyze semantic drift for a specific function"""
+    """[DEPRECATED] Analyze semantic drift for a specific function - use enhanced query endpoints instead"""
+    logger.warning("analyze-function endpoint is deprecated. Use enhanced query endpoints instead")
+    
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found. Please clone first.")
         
         git_analyzer = active_repos[repo_id]
-        
-        # TODO: Re-enable drift analysis once transformers issue is resolved
-        # detector = DriftDetector(git_analyzer)
-        # feature_history = detector.analyze_function_drift(
-        #     request.file_path, 
-        #     request.function_name, 
-        #     request.max_commits
-        # )
         
         # For now, return basic function information
         commits = git_analyzer.get_commits_for_function(request.file_path, request.function_name, request.max_commits)
@@ -328,7 +803,9 @@ async def analyze_function_drift(repo_id: str, request: AnalyzeFunctionRequest):
             "drift_events": [],
             "change_summary": {"total_changes": len(commits)},
             "timeline": [],
-            "risk_assessment": {"risk_level": "unknown"}
+            "risk_assessment": {"risk_level": "unknown"},
+            "deprecated": True,
+            "recommended_endpoint": f"/api/query-repository/{repo_id}"
         }
         
     except ValueError as e:
@@ -436,139 +913,187 @@ async def get_repository_commits(repo_id: str, limit: int = Query(50, descriptio
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get commits: {str(e)}")
 
-# Background task functions
-async def index_repository_for_rag(repo_id: str, repo_url: str, git_analyzer):
-    """Background task to index repository in RAG system"""
-    try:
-        rag_system.index_repository(git_analyzer, repo_id, repo_url)
-        print(f"Successfully indexed repository {repo_id} for RAG")
-    except Exception as e:
-        print(f"Error indexing repository {repo_id} for RAG: {str(e)}")
+# ===== AUTHENTICATION ENDPOINTS =====
 
-async def store_repository_commits(repo_id: str, git_analyzer):
-    """Background task to store repository commits in database"""
-    try:
-        # Get repository from database
-        repo_url = None
-        for rid, analyzer in active_repos.items():
-            if rid == repo_id:
-                # Find the repo URL from the git remote
-                try:
-                    remote_url = analyzer.repo.remotes.origin.url
-                    repo_url = remote_url
-                    break
-                except:
-                    pass
-        
-        if not repo_url:
-            print(f"Could not find repo URL for {repo_id}")
-            return
-            
-        repository = db_manager.get_repository_by_url(repo_url)
-        if not repository:
-            print(f"Repository {repo_id} not found in database")
-            return
-        
-        # Store recent commits (limit to avoid overwhelming the database)
-        commits = list(git_analyzer.repo.iter_commits(max_count=100))
-        
-        for commit in commits:
-            try:
-                # Check if commit already exists
-                existing = db_manager.get_commit(repository.id, commit.hexsha)
-                if existing:
-                    continue
-                
-                # Add new commit
-                db_manager.add_commit(
-                    repository_id=repository.id,
-                    commit_hash=commit.hexsha,
-                    message=commit.message.strip(),
-                    author=commit.author.name,
-                    timestamp=datetime.fromtimestamp(commit.committed_date),
-                    files_changed=len(commit.stats.files)
-                )
-                
-                # Store file records for this commit
-                for file_path, stats in commit.stats.files.items():
-                    db_manager.add_file_record(
-                        commit_id=db_manager.get_commit(repository.id, commit.hexsha).id,
-                        file_path=file_path,
-                        lines_added=stats['insertions'],
-                        lines_deleted=stats['deletions']
-                    )
-                    
-            except Exception as e:
-                print(f"Error storing commit {commit.hexsha}: {str(e)}")
-                continue
-        
-        print(f"Successfully stored commits for repository {repo_id}")
-        
-    except Exception as e:
-        print(f"Error storing repository commits {repo_id}: {str(e)}")
-
-async def cleanup_old_repos():
-    """Background task to cleanup old temporary repositories"""
-    try:
-        # In production, implement proper cleanup logic
-        # For now, just clean up very old temporary directories
-        import time
-        current_time = time.time()
-        
-        for repo_id, temp_dir in list(temp_dirs.items()):
-            try:
-                # Check if directory is older than 1 hour
-                dir_age = current_time - os.path.getctime(temp_dir)
-                if dir_age > 3600:  # 1 hour
-                    if os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                    del temp_dirs[repo_id]
-                    if repo_id in active_repos:
-                        del active_repos[repo_id]
-                    print(f"Cleaned up old repository: {repo_id}")
-            except Exception as e:
-                print(f"Error cleaning up repository {repo_id}: {str(e)}")
-                
-    except Exception as e:
-        print(f"Error in cleanup task: {str(e)}")
-
-@app.get("/api/health")
-async def health_check():
-    """Health check with system status"""
+@app.get("/api/auth/github")
+async def github_oauth_init():
+    """Initiate GitHub OAuth flow"""
+    if not github_service.available:
+        raise HTTPException(status_code=501, detail="GitHub OAuth not configured")
+    
+    oauth_url, state = github_service.get_oauth_url()
+    
     return {
-        "status": "healthy",
-        "active_repositories": len(active_repos),
-        "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0",
-        "config": config.validate_config()
+        "oauth_url": oauth_url,
+        "state": state
     }
 
-@app.get("/api/test-git")
-async def test_git():
-    """Test git functionality"""
+@app.get("/api/auth/github/callback")
+async def github_oauth_callback(
+    code: str = Query(...),
+    state: str = Query(...),
+    referer: str = Header(None)
+):
+    """Handle GitHub OAuth callback and redirect to frontend"""
+    if not github_service.available:
+        raise HTTPException(status_code=501, detail="GitHub OAuth not configured")
+    
     try:
-        import subprocess
+        # Exchange code for access token
+        access_token = github_service.exchange_code_for_token(code, state)
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Failed to exchange OAuth code")
         
-        # Check if git is available
-        result = subprocess.run(['git', '--version'], capture_output=True, text=True)
-        git_version = result.stdout.strip() if result.returncode == 0 else "Git not found"
+        # Get user information
+        github_user = github_service.get_user_info(access_token)
+        if not github_user:
+            raise HTTPException(status_code=400, detail="Failed to get user information")
         
-        # Test temp directory creation
-        temp_dir = tempfile.mkdtemp(prefix="test_")
-        temp_exists = os.path.exists(temp_dir)
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # Encrypt and store the access token
+        encrypted_token = github_service.encrypt_token(access_token)
         
-        return {
-            "git_available": result.returncode == 0,
-            "git_version": git_version,
-            "temp_dir_creation": temp_exists,
-            "python_version": os.sys.version
-        }
+        # Create or update user in database
+        now = datetime.now().isoformat()
+        user = User(
+            id=github_user.id,
+            github_username=github_user.username,
+            github_avatar=github_user.avatar_url,
+            github_email=github_user.email,
+            display_name=github_user.name,
+            access_token=encrypted_token,
+            created_at=now,
+            last_login=now,
+            is_active=True
+        )
+        
+        # Check if user exists
+        existing_user = db_manager.get_user(github_user.id)
+        if existing_user:
+            # Update existing user
+            user.created_at = existing_user.created_at
+            db_manager.update_user_last_login(github_user.id)
+        
+        # Save user
+        if not db_manager.save_user(user):
+            raise HTTPException(status_code=500, detail="Failed to save user")
+        
+        # Create session
+        session_id = generate_session_id()
+        user_sessions[session_id] = github_user.id
+        
+        # Determine redirect URL from Referer header
+        if referer:
+            # Extract the origin from the referer
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            frontend_origin = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            # Fallback to localhost
+            frontend_origin = "http://localhost:3000"
+        
+        # Redirect to frontend with session ID
+        redirect_url = f"{frontend_origin}/auth/callback?session_id={session_id}&success=true"
+        return RedirectResponse(url=redirect_url, status_code=302)
+        
     except Exception as e:
-        return {
-            "error": str(e),
-            "traceback": traceback.format_exc()
-        }
+        # Determine redirect URL for error case
+        if referer:
+            from urllib.parse import urlparse
+            parsed = urlparse(referer)
+            frontend_origin = f"{parsed.scheme}://{parsed.netloc}"
+        else:
+            frontend_origin = "http://localhost:3000"
+        
+        error_url = f"{frontend_origin}/auth/callback?error={str(e)}&success=false"
+        return RedirectResponse(url=error_url, status_code=302)
+
+@app.get("/api/auth/user")
+async def get_current_user_info(current_user: str = Depends(require_auth)):
+    """Get current user information"""
+    user = db_manager.get_user(current_user)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return UserResponse(
+        id=user.id,
+        github_username=user.github_username,
+        github_avatar=user.github_avatar,
+        github_email=user.github_email,
+        display_name=user.display_name,
+        created_at=user.created_at,
+        last_login=user.last_login
+    )
+
+@app.post("/api/auth/logout")
+async def logout(authorization: str = Header(None)):
+    """Logout and invalidate session"""
+    if authorization and authorization.startswith("Bearer "):
+        session_id = authorization[7:]
+        if session_id in user_sessions:
+            del user_sessions[session_id]
+    
+    return {"message": "Logged out successfully"}
+
+@app.get("/api/auth/github/repositories")
+async def get_github_repositories(current_user: str = Depends(require_auth)):
+    """Get user's GitHub repositories (including private ones)"""
+    if not github_service.available:
+        raise HTTPException(status_code=501, detail="GitHub service not available")
+    
+    user = db_manager.get_user(current_user)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    try:
+        # Decrypt access token
+        access_token = github_service.decrypt_token(user.access_token)
+        
+        # Get repositories
+        repositories = github_service.get_user_repositories(access_token)
+        
+        return [
+            GitHubRepositoryResponse(
+                id=repo.id,
+                name=repo.name,
+                full_name=repo.full_name,
+                clone_url=repo.clone_url,
+                private=repo.private,
+                description=repo.description,
+                language=repo.language,
+                default_branch=repo.default_branch
+            )
+            for repo in repositories
+        ]
+        
+    except Exception as e:
+        logger.error(f"Error getting GitHub repositories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get repositories")
+
+@app.get("/api/user/repositories")
+async def get_user_repositories(current_user: str = Depends(require_auth)):
+    """Get repositories associated with the current user"""
+    try:
+        repositories = db_manager.get_user_repositories(current_user)
+        
+        return [
+            {
+                "id": repo.id,
+                "url": repo.url,
+                "name": repo.name,
+                "local_path": repo.local_path,
+                "created_at": repo.created_at,
+                "updated_at": repo.updated_at,
+                "total_commits": repo.total_commits,
+                "total_files": repo.total_files,
+                "primary_language": repo.primary_language,
+                "status": repo.status
+            }
+            for repo in repositories
+        ]
+        
+    except Exception as e:
+        logger.error(f"Error getting user repositories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get repositories")
 
 @app.post("/api/analyze-commit/{repo_id}")
 async def analyze_commit_breaking_changes(repo_id: str, request: AnalyzeCommitRequest):
@@ -891,69 +1416,132 @@ async def search_files(repo_id: str, query: str = Query(...), max_results: int =
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/risk-dashboard")
-async def get_risk_dashboard(repo_id: str):
-    """Get comprehensive risk dashboard for repository"""
+async def get_risk_dashboard(repo_id: str, force_refresh: bool = Query(False, description="Force refresh of dashboard")):
+    """Get comprehensive risk dashboard for repository with intelligent caching"""
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found.")
         
+        # Check if we have a valid cached dashboard
+        if not force_refresh and db_manager.is_dashboard_cache_valid(repo_id, max_age_hours=6):
+            logger.info(f"Using cached dashboard for {repo_id}")
+            cached_dashboard = db_manager.get_dashboard_cache(repo_id)
+            if cached_dashboard:
+                return json.loads(cached_dashboard.dashboard_data)
+        
+        logger.info(f"Generating fresh dashboard for {repo_id}")
         git_analyzer = active_repos[repo_id]
-        
-        # Get recent commits for analysis
         repo = git_analyzer.repo
-        recent_commits = list(repo.iter_commits(max_count=50))
         
-        # Analyze recent commits for breaking changes
+        # Get recent commits (limited to speed up analysis)
+        recent_commits = list(repo.iter_commits(max_count=100))
+        
+        # Check which commits we've already analyzed
+        analyzed_commits = {analysis.commit_hash: analysis 
+                          for analysis in db_manager.get_repository_commit_analyses(repo_id, limit=200)}
+        
+        # Analyze only new commits
+        new_analyses = []
+        for commit in recent_commits[:50]:  # Limit to 50 most recent for dashboard
+            if commit.hexsha not in analyzed_commits:
+                try:
+                    logger.info(f"Analyzing new commit: {commit.hexsha[:8]}")
+                    analysis = breaking_change_detector.analyze_commit(git_analyzer, commit.hexsha)
+                    
+                    # Save analysis to database
+                    commit_analysis = CommitAnalysis(
+                        id=f"{repo_id}_{commit.hexsha}",
+                        repo_id=repo_id,
+                        commit_hash=commit.hexsha,
+                        overall_risk_score=float(analysis.overall_risk_score),
+                        breaking_changes_count=len(analysis.breaking_changes),
+                        complexity_score=float(analysis.complexity_score),
+                        semantic_drift_score=float(analysis.semantic_drift_score),
+                        files_changed=json.dumps(analysis.files_changed),
+                        breaking_changes=json.dumps([{
+                            "change_type": bc.change_type.value,
+                            "risk_level": bc.risk_level.value,
+                            "file_path": bc.file_path,
+                            "description": bc.description
+                        } for bc in analysis.breaking_changes]),
+                        analyzed_at=datetime.now().isoformat()
+                    )
+                    
+                    if db_manager.save_commit_analysis(commit_analysis):
+                        analyzed_commits[commit.hexsha] = commit_analysis
+                        new_analyses.append(commit_analysis)
+                    
+                except Exception as e:
+                    logger.error(f"Error analyzing commit {commit.hexsha}: {e}")
+                    continue
+        
+        # Generate dashboard from all analyzed commits
         risk_data = {
-            "total_commits_analyzed": 0,
+            "total_commits_analyzed": len(analyzed_commits),
             "high_risk_commits": 0,
             "breaking_changes_by_type": {},
             "risk_trend": [],
             "most_risky_files": {},
-            "recent_high_risk_commits": []
+            "recent_high_risk_commits": [],
+            "performance_stats": {
+                "new_commits_analyzed": len(new_analyses),
+                "cached_analyses_used": len(analyzed_commits) - len(new_analyses),
+                "cache_hit_rate": round((len(analyzed_commits) - len(new_analyses)) / max(len(analyzed_commits), 1) * 100, 1)
+            }
         }
         
-        for commit in recent_commits[:20]:  # Analyze recent 20 commits
+        # Process cached analyses for dashboard
+        for analysis in analyzed_commits.values():
+            if analysis.overall_risk_score > 0.7:
+                risk_data["high_risk_commits"] += 1
+                risk_data["recent_high_risk_commits"].append({
+                    "commit_hash": analysis.commit_hash[:8],
+                    "risk_score": float(analysis.overall_risk_score),
+                    "breaking_changes_count": analysis.breaking_changes_count
+                })
+            
+            # Count breaking change types from stored data
             try:
-                analysis = breaking_change_detector.analyze_commit(git_analyzer, commit.hexsha)
-                risk_data["total_commits_analyzed"] += 1
-                
-                if analysis.overall_risk_score > 0.7:
-                    risk_data["high_risk_commits"] += 1
-                    risk_data["recent_high_risk_commits"].append({
-                        "commit_hash": analysis.commit_hash[:8],
-                        "message": analysis.commit_message[:100],
-                        "risk_score": float(analysis.overall_risk_score),
-                        "breaking_changes_count": len(analysis.breaking_changes)
-                    })
-                
-                # Count breaking change types
-                for bc in analysis.breaking_changes:
-                    change_type = bc.change_type.value
+                breaking_changes = json.loads(analysis.breaking_changes)
+                for bc in breaking_changes:
+                    change_type = bc.get("change_type", "unknown")
                     risk_data["breaking_changes_by_type"][change_type] = \
                         risk_data["breaking_changes_by_type"].get(change_type, 0) + 1
-                
-                # Track risky files
-                for file_path in analysis.files_changed:
+            except:
+                pass
+            
+            # Track risky files
+            try:
+                files_changed = json.loads(analysis.files_changed)
+                for file_path in files_changed:
                     risk_data["most_risky_files"][file_path] = \
-                        risk_data["most_risky_files"].get(file_path, 0) + float(analysis.overall_risk_score)
-                
-                # Add to trend
-                risk_data["risk_trend"].append({
-                    "commit_hash": analysis.commit_hash[:8],
-                    "timestamp": analysis.timestamp,
-                    "risk_score": float(analysis.overall_risk_score)
-                })
-                
-            except Exception as e:
-                print(f"Error analyzing commit {commit.hexsha}: {str(e)}")
-                continue
+                        risk_data["most_risky_files"].get(file_path, 0) + analysis.overall_risk_score
+            except:
+                pass
+            
+            # Add to risk trend
+            risk_data["risk_trend"].append({
+                "commit_hash": analysis.commit_hash[:8],
+                "timestamp": analysis.analyzed_at,
+                "risk_score": float(analysis.overall_risk_score)
+            })
         
-        # Sort most risky files
+        # Sort and limit results
         risk_data["most_risky_files"] = dict(
             sorted([(k, float(v)) for k, v in risk_data["most_risky_files"].items()], 
                    key=lambda x: x[1], reverse=True)[:10]
         )
+        
+        risk_data["recent_high_risk_commits"] = sorted(
+            risk_data["recent_high_risk_commits"],
+            key=lambda x: x["risk_score"], reverse=True
+        )[:10]
+        
+        # Sort risk trend by timestamp (most recent first)
+        risk_data["risk_trend"] = sorted(
+            risk_data["risk_trend"],
+            key=lambda x: x["timestamp"], reverse=True
+        )[:30]
         
         # Calculate overall repository risk score
         if risk_data["total_commits_analyzed"] > 0:
@@ -961,12 +1549,25 @@ async def get_risk_dashboard(repo_id: str):
         else:
             risk_data["overall_risk_score"] = 0.0
         
-        # Convert numpy types to Python native types for JSON serialization
+        # Convert numpy types
         risk_data = convert_numpy_types(risk_data)
+        
+        # Cache the dashboard
+        dashboard_cache = RepositoryDashboard(
+            id=f"dashboard_{repo_id}",
+            repo_id=repo_id,
+            dashboard_data=json.dumps(risk_data),
+            last_updated=datetime.now().isoformat(),
+            commits_analyzed=risk_data["total_commits_analyzed"]
+        )
+        db_manager.save_dashboard_cache(dashboard_cache)
+        
+        logger.info(f"Dashboard generated for {repo_id}: {len(new_analyses)} new analyses, {risk_data['performance_stats']['cache_hit_rate']}% cache hit rate")
         
         return risk_data
         
     except Exception as e:
+        logger.error(f"Failed to generate risk dashboard: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate risk dashboard: {str(e)}")
 
 @app.get("/api/repository/{repo_id}/commit/{commit_hash}/analysis")
@@ -1311,4 +1912,101 @@ async def get_semantic_drift_analysis(repo_id: str, days: int = Query(30, descri
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Semantic drift analysis failed: {str(e)}")
 
-# ...existing code...
+# ===== BACKGROUND TASK FUNCTIONS =====
+
+async def index_repository_for_rag(repo_id: str, repo_url: str, git_analyzer: GitAnalyzer):
+    """Background task to index repository in RAG system"""
+    try:
+        logger.info(f"Starting RAG indexing for repository {repo_id}")
+        rag_system.index_repository(git_analyzer, repo_id, repo_url)
+        logger.info(f"Successfully indexed repository {repo_id} in RAG system")
+    except Exception as e:
+        logger.error(f"Failed to index repository {repo_id} in RAG system: {e}")
+
+async def store_repository_commits(repo_id: str, git_analyzer: GitAnalyzer):
+    """Background task to store repository commits in database"""
+    try:
+        logger.info(f"Starting commit storage for repository {repo_id}")
+        
+        # Get repository stats
+        stats = git_analyzer.analyze_repository_stats()
+        
+        # Update repository with stats
+        repo = db_manager.get_repository(repo_id)
+        if repo:
+            repo.total_commits = stats.get("commits", 0)
+            repo.total_files = stats.get("files", 0)
+            repo.primary_language = list(stats.get("languages", {}).keys())[0] if stats.get("languages") else ""
+            repo.updated_at = datetime.now().isoformat()
+            db_manager.save_repository(repo)
+        
+        # Store commits
+        commits = git_analyzer.get_commits(limit=500)  # Store up to 500 recent commits
+        commit_records = []
+        
+        for commit in commits:
+            try:
+                commit_record = Commit(
+                    id=f"{repo_id}_{commit.hash}",
+                    repo_id=repo_id,
+                    hash=commit.hash,
+                    message=commit.message,
+                    author=commit.author,
+                    timestamp=commit.timestamp.isoformat() if hasattr(commit.timestamp, 'isoformat') else str(commit.timestamp),
+                    files_changed=json.dumps(commit.files_changed) if hasattr(commit, 'files_changed') else "[]",
+                    additions=getattr(commit, 'additions', 0),
+                    deletions=getattr(commit, 'deletions', 0),
+                    risk_score=0.5,  # Default risk score, will be calculated later
+                    breaking_changes="[]"
+                )
+                commit_records.append(commit_record)
+            except Exception as e:
+                logger.debug(f"Error processing commit {commit.hash}: {e}")
+                continue
+        
+        # Save commits in batches
+        batch_size = 50
+        for i in range(0, len(commit_records), batch_size):
+            batch = commit_records[i:i + batch_size]
+            if not db_manager.save_commits(batch):
+                logger.warning(f"Failed to save commit batch {i//batch_size + 1}")
+        
+        logger.info(f"Successfully stored {len(commit_records)} commits for repository {repo_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to store commits for repository {repo_id}: {e}")
+
+import os
+import traceback
+import secrets
+import json
+import logging
+import numpy as np
+
+def normalize_repository_url(repo_url: str) -> str:
+    """Normalize repository URL to handle different formats"""
+    url = repo_url.strip().lower()
+    
+    # Remove trailing slash
+    if url.endswith('/'):
+        url = url[:-1]
+    
+    # Convert http to https
+    if url.startswith('http://'):
+        url = url.replace('http://', 'https://')
+    
+    # Add .git suffix if missing for GitHub URLs
+    if 'github.com' in url and not url.endswith('.git'):
+        url += '.git'
+    
+    # Remove any auth tokens from URL for comparison
+    if '@' in url:
+        # Remove tokens like https://token@github.com/...
+        parts = url.split('@')
+        if len(parts) == 2 and '://' in parts[0]:
+            protocol = parts[0].split('://')[0]
+            url = f"{protocol}://{parts[1]}"
+    
+    return url
+
+# Load environment variables
