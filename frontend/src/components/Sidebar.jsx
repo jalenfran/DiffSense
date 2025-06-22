@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Search, Star, Lock, Globe, Plus, LogOut, User, GitBranch, X, Loader2, Moon, Sun } from 'lucide-react'
-import axios from 'axios'
 import { useDarkMode } from '../contexts/DarkModeContext'
+import { diffSenseAPI } from '../services/api'
 
 function Sidebar({
     repositories,
@@ -21,15 +21,20 @@ function Sidebar({
     onShowAddDialog
 }) {
     const [showFavoritesOnly, setShowFavoritesOnly] = useState(false)
-    
+
     const { darkMode, toggleDarkMode } = useDarkMode()
     const displayedRepos = showFavoritesOnly
         ? repositories.filter(repo => favorites.includes(repo.id))
         : repositories
 
-    const handleLogout = () => {
-        window.location.href = 'http://localhost:3000/auth/logout'
-        onLogout()
+    const handleLogout = async () => {
+        try {
+            await diffSenseAPI.logout()
+        } catch (error) {
+            console.error('Logout error:', error)
+        } finally {
+            onLogout()
+        }
     }
 
     const getLanguageColor = (language) => {
@@ -48,7 +53,8 @@ function Sidebar({
             'Kotlin': 'bg-purple-500',
             'Dart': 'bg-blue-400',
             'HTML': 'bg-orange-400',
-            'CSS': 'bg-blue-400'        }
+            'CSS': 'bg-blue-400'
+        }
         return colors[language] || 'bg-gray-400'
     }
 
@@ -86,10 +92,10 @@ function Sidebar({
                 </div>                {/* User Info */}
                 <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg mb-4">
                     <div className="w-8 h-8 bg-gray-300 dark:bg-gray-600 rounded-full flex items-center justify-center">
-                        {user.photos && user.photos[0] ? (
+                        {user.github_avatar ? (
                             <img
-                                src={user.photos[0].value}
-                                alt={user.displayName || user.username}
+                                src={user.github_avatar}
+                                alt={user.display_name || user.github_username}
                                 className="w-8 h-8 rounded-full"
                             />
                         ) : (
@@ -98,9 +104,9 @@ function Sidebar({
                     </div>
                     <div className="flex-1 min-w-0">
                         <p className="font-medium text-gray-900 dark:text-white text-sm truncate">
-                            {user.displayName || user.username}
+                            {user.display_name || user.github_username}
                         </p>
-                        <p className="text-gray-500 dark:text-gray-400 text-xs truncate">@{user.username}</p>
+                        <p className="text-gray-500 dark:text-gray-400 text-xs truncate">@{user.github_username}</p>
                     </div>
                     <button
                         onClick={handleLogout}
@@ -158,18 +164,18 @@ function Sidebar({
                         >
                             <div className="flex items-center justify-between">
                                 <div className="flex-1 min-w-0">                                    <div className="flex items-center gap-2">
-                                        <h3 className="font-medium text-gray-900 dark:text-white truncate text-sm">
-                                            {repo.name}
-                                        </h3>
-                                        {selectedRepo?.id === repo.id && isRepositoryLoading && (
-                                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
-                                        )}
-                                        {repo.private ? (
-                                            <Lock className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                                        ) : (
-                                            <Globe className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                                        )}
-                                    </div>
+                                    <h3 className="font-medium text-gray-900 dark:text-white truncate text-sm">
+                                        {repo.name}
+                                    </h3>
+                                    {selectedRepo?.id === repo.id && isRepositoryLoading && (
+                                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
+                                    )}
+                                    {repo.private ? (
+                                        <Lock className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
+                                    ) : (
+                                        <Globe className="w-3 h-3 text-gray-400 dark:text-gray-500 flex-shrink-0" />
+                                    )}
+                                </div>
                                 </div>
 
                                 <div className="flex items-center gap-1">

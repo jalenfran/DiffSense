@@ -1,9 +1,15 @@
 import { LogOut, User, GitBranch } from 'lucide-react'
+import { diffSenseAPI } from '../services/api'
 
 function Header({ user, onLogout }) {
-    const handleLogout = () => {
-        window.location.href = 'http://localhost:3000/auth/logout'
-        onLogout()
+    const handleLogout = async () => {
+        try {
+            await diffSenseAPI.logout()
+        } catch (error) {
+            console.error('Logout error:', error)
+        } finally {
+            onLogout()
+        }
     }
 
     return (
@@ -15,15 +21,13 @@ function Header({ user, onLogout }) {
                             <GitBranch className="w-6 h-6 text-white" />
                         </div>
                         <h1 className="text-xl font-bold text-gray-900">DiffSense</h1>
-                    </div>
-
-                    <div className="flex items-center gap-4">
+                    </div>                    <div className="flex items-center gap-4">
                         <div className="flex items-center gap-3">
                             <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center">
-                                {user.photos && user.photos[0] ? (
+                                {user.github_avatar ? (
                                     <img
-                                        src={user.photos[0].value}
-                                        alt={user.displayName || user.username}
+                                        src={user.github_avatar}
+                                        alt={user.display_name || user.github_username}
                                         className="w-8 h-8 rounded-full"
                                     />
                                 ) : (
@@ -32,9 +36,9 @@ function Header({ user, onLogout }) {
                             </div>
                             <div className="text-sm">
                                 <p className="font-medium text-gray-900">
-                                    {user.displayName || user.username}
+                                    {user.display_name || user.github_username}
                                 </p>
-                                <p className="text-gray-500">@{user.username}</p>
+                                <p className="text-gray-500">@{user.github_username}</p>
                             </div>
                         </div>
 

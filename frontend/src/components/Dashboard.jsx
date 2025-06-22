@@ -18,6 +18,7 @@ function Dashboard({ user, onLogout }) {
     const [searchQuery, setSearchQuery] = useState('')
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
     const [showAddDialog, setShowAddDialog] = useState(false)
+    const [isLoadingRepos, setIsLoadingRepos] = useState(false)
 
     const { selectRepository, selectedRepo, isLoading: isRepositoryLoading } = useRepository()
 
@@ -29,17 +30,64 @@ function Dashboard({ user, onLogout }) {
         localStorage.setItem('diffsense-recently-viewed', JSON.stringify(recentlyViewed))
     }, [recentlyViewed])
 
+    // Load analyzed repositories from DiffSense platform (not localStorage)
     useEffect(() => {
-        localStorage.setItem('diffsense-repositories', JSON.stringify(repositories))
-    }, [repositories])
-
-    // Load saved repositories from localStorage
-    useEffect(() => {
-        const savedRepos = localStorage.getItem('diffsense-repositories')
-        if (savedRepos) {
-            setRepositories(JSON.parse(savedRepos))
+        if (user && diffSenseAPI.isAuthenticated()) {
+            loadAnalyzedRepositories()
         }
-    }, [])
+    }, [user])
+
+    const loadAnalyzedRepositories = async () => {
+        setIsLoadingRepos(true)
+        try {
+            const analyzedRepos = await diffSenseAPI.getUserRepositories()
+
+            // Convert DiffSense API repository format to UI format
+            const formattedRepos = analyzedRepos.map(repo => {
+                // Extract owner and name from the URL or name
+                let owner = 'unknown'
+                let repoName = repo.name
+
+                // Try to extract from GitHub URL format
+                const urlMatch = repo.url?.match(/github\.com\/([^\/]+)\/([^\/]+)/)
+                if (urlMatch) {
+                    [, owner, repoName] = urlMatch
+                    repoName = repoName.replace('.git', '')
+                }
+
+                return {
+                    id: `${owner}/${repoName}`,
+                    name: repoName,
+                    full_name: `${owner}/${repoName}`,
+                    owner: { login: owner },
+                    html_url: repo.url || `https://github.com/${owner}/${repoName}`,
+                    clone_url: repo.url || `https://github.com/${owner}/${repoName}.git`,
+                    description: `Analyzed ${repo.total_commits || 0} commits, ${repo.total_files || 0} files`,
+                    private: false, // We don't have this info from the DiffSense API
+                    stargazers_count: 0,
+                    forks_count: 0,
+                    language: repo.primary_language,
+                    created_at: repo.created_at,
+                    updated_at: repo.updated_at,
+                    repo_id: repo.id, // Store the DiffSense repo ID (important!)
+                    total_commits: repo.total_commits,
+                    total_files: repo.total_files, status: repo.status,
+                    source: 'diffsense', // Mark as from DiffSense API
+                    isAnalyzed: true // Mark as already analyzed in DiffSense
+                }
+            })            // Replace repositories entirely with API data (no localStorage merge)
+            setRepositories(formattedRepos)
+
+        } catch (error) {
+            console.error('Error loading analyzed repositories:', error)            // Fallback to localStorage only if API fails
+            const savedRepos = localStorage.getItem('diffsense-repositories')
+            if (savedRepos) {
+                setRepositories(JSON.parse(savedRepos))
+            }
+        } finally {
+            setIsLoadingRepos(false)
+        }
+    }
 
     const handleSelectRepo = (repo) => {
         selectRepository(repo)
@@ -55,41 +103,37 @@ function Dashboard({ user, onLogout }) {
     const toggleFavorite = (repoId) => {
         setFavorites(prev =>
             prev.includes(repoId)
-                ? prev.filter(id => id !== repoId)
-                : [...prev, repoId]        )
+                ? prev.filter(id => id !== repoId) : [...prev, repoId]
+        )
     }
 
-    const handleAddRepository = async (owner, repoName) => {
-        try {
-            // Construct the repository URL
+    const handleAddRepository = async (owner, repoName, githubRepo = null) => {
+        try {            // Construct the repository URL
             const repoUrl = `https://github.com/${owner}/${repoName}`
-            
-            console.log('Adding repository:', repoUrl)
-            
+
+            // Check if user is authenticated and if this might be a private repo
+            const useAuth = diffSenseAPI.isAuthenticated()
+
             // Use DiffSense API to clone and analyze the repository
-            const result = await diffSenseAPI.cloneRepository(repoUrl)
-            
-            console.log('Repository cloned successfully:', result)
-            
-            // Create a repository object for the UI
+            const result = await diffSenseAPI.cloneRepository(repoUrl, useAuth)
+            // Create a repository object for the UI, preferring GitHub API data if available
             const newRepo = {
                 id: `${owner}/${repoName}`,
                 name: repoName,
                 full_name: `${owner}/${repoName}`,
                 owner: { login: owner },
-                html_url: repoUrl,
-                clone_url: `${repoUrl}.git`,
-                description: 'Repository added via DiffSense',
-                private: false, // We'll assume public for now
-                stargazers_count: 0,
-                forks_count: 0,
-                language: null,
+                html_url: githubRepo?.clone_url?.replace('.git', '') || repoUrl,
+                clone_url: githubRepo?.clone_url || `${repoUrl}.git`,
+                description: githubRepo?.description || 'Repository added via URL',
+                private: githubRepo?.private || false,
+                stargazers_count: 0, // Not available from the API
+                forks_count: 0, // Not available from the API
+                language: githubRepo?.language || null,
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
-                repo_id: result.repo_id // Store the DiffSense repo ID
-            }
-            
-            // Add to repositories list
+                repo_id: result.repo_id, // Store the DiffSense repo ID
+                isAnalyzed: true // Mark as analyzed in DiffSense
+            }            // Add to repositories list
             setRepositories(prev => {
                 // Check if already exists
                 if (prev.some(repo => repo.id === newRepo.id)) {
@@ -97,26 +141,44 @@ function Dashboard({ user, onLogout }) {
                 }
                 return [...prev, newRepo]
             })
-            
-            // Immediately select the new repository
-            selectRepository(newRepo)
-            
+
+            // Immediately select the new repository with the existing repo_id
+            // to avoid duplicate clone calls
+            selectRepository(newRepo, result.repo_id)
+
+            // Refresh the analyzed repositories list from the API
+            // to get the most up-to-date information
+            setTimeout(() => {
+                loadAnalyzedRepositories()
+            }, 1000) // Small delay to allow the backend to process
+
         } catch (error) {
             console.error('Error adding repository:', error)
             throw error
         }
     }
 
-    const handleRemoveRepository = (repoId) => {
+    const handleRemoveRepository = async (repoId) => {
         setRepositories(prev => prev.filter(repo => repo.id !== repoId))
 
         // Also remove from favorites and recently viewed
         setFavorites(prev => prev.filter(id => id !== repoId))
         setRecentlyViewed(prev => prev.filter(item => item.id !== repoId))
 
+        // Clean up repository resources if we have the repo_id
+        const repo = repositories.find(r => r.id === repoId)
+        if (repo && repo.repo_id) {
+            try {
+                await diffSenseAPI.cleanupRepository(repo.repo_id)
+            } catch (error) {
+                console.warn('Failed to cleanup repository resources:', error)
+            }
+        }
+
         // Clear selection if removing selected repo
         if (selectedRepo?.id === repoId) {
-            setSelectedRepo(null)
+            // Don't call setSelectedRepo as it doesn't exist in the context
+            // The context will handle this automatically
         }
     }
 
@@ -146,7 +208,7 @@ function Dashboard({ user, onLogout }) {
         <div className="h-screen bg-gray-50 dark:bg-gray-900 flex duration-200 transition-colors relative overflow-hidden">
             {/* Mobile sidebar overlay */}
             {isMobileSidebarOpen && (
-                <div 
+                <div
                     className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
                     onClick={() => setIsMobileSidebarOpen(false)}
                 />
@@ -176,10 +238,10 @@ function Dashboard({ user, onLogout }) {
                     onShowAddDialog={() => setShowAddDialog(true)}
                 />
             </div>            {/* Main content area */}
-            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent                    user={user}
-                    onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-                    isMobileSidebarOpen={isMobileSidebarOpen}
-                />
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent user={user}
+                onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+                isMobileSidebarOpen={isMobileSidebarOpen}
+            />
             </div>
 
             {/* Add Repository Dialog */}

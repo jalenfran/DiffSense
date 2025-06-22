@@ -1,6 +1,7 @@
 import { Github, ArrowRight, Zap, GitBranch, Search, AlertCircle, Moon, Sun } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useDarkMode } from '../contexts/DarkModeContext'
+import { diffSenseAPI } from '../services/api'
 
 function LandingPage() {
     const [oauthError, setOauthError] = useState(false)
@@ -15,10 +16,29 @@ function LandingPage() {
         }
     }, [])
 
-    const handleGitHubLogin = () => {
+    const handleGitHubLogin = async () => {
         if (isRedirecting) return // Prevent multiple clicks
         setIsRedirecting(true)
-        window.location.href = 'http://localhost:3000/auth/github'
+
+        try {
+            console.log('Initiating GitHub OAuth...')
+            const authData = await diffSenseAPI.initiateGitHubAuth()
+            console.log('Auth data received:', authData)
+
+            // The API returns 'oauth_url' not 'auth_url'
+            if (authData.oauth_url) {
+                console.log('Redirecting to:', authData.oauth_url)
+                window.location.href = authData.oauth_url
+            } else {
+                console.error('No OAuth URL received in response:', authData)
+                setOauthError(true)
+                setIsRedirecting(false)
+            }
+        } catch (error) {
+            console.error('Failed to initiate GitHub auth:', error)
+            setOauthError(true)
+            setIsRedirecting(false)
+        }
     }
     return (
         <div className="min-h-screen bg-gradient-to-br from-primary-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 transition-colors">
@@ -83,15 +103,15 @@ function LandingPage() {
                 {/* Features */}
                 <div className="py-20">
                     <div className="grid md:grid-cols-3 gap-8">                        <div className="card text-center">
-                            <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <Search className="w-8 h-8 text-primary-600 dark:text-primary-400" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-3 text-gray-900 dark:text-white">Smart Analysis</h3>
-                            <p className="text-gray-600 dark:text-gray-300">
-                                Advanced algorithms analyze your code changes to provide meaningful insights
-                                and patterns in your development process.
-                            </p>
+                        <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Search className="w-8 h-8 text-primary-600 dark:text-primary-400" />
                         </div>
+                        <h3 className="text-xl font-semibold mb-3 text-gray-900 dark:text-white">Smart Analysis</h3>
+                        <p className="text-gray-600 dark:text-gray-300">
+                            Advanced algorithms analyze your code changes to provide meaningful insights
+                            and patterns in your development process.
+                        </p>
+                    </div>
 
                         <div className="card text-center">
                             <div className="bg-primary-100 dark:bg-primary-900 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
