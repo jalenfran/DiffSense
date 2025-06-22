@@ -185,6 +185,25 @@ class SemanticAnalyzer:
             }
         )
     
+    def get_embedding(self, text: str) -> np.ndarray:
+        """Get embedding for text (wrapper for text embedder)"""
+        try:
+            return self.text_embedder.embed_text(text)
+        except Exception as e:
+            logger.warning(f"Error generating embedding: {e}")
+            return None
+    
+    def get_code_embedding(self, code: str) -> Optional[np.ndarray]:
+        """Get embedding specifically for code content"""
+        try:
+            if not code or not code.strip():
+                return None
+            
+            return self.code_embedder.embed_code(code)
+        except Exception as e:
+            logger.warning(f"Error generating code embedding: {e}")
+            return None
+
     def calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Calculate cosine similarity between two embeddings"""
         return cosine_similarity([embedding1], [embedding2])[0][0]

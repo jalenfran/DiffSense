@@ -1,63 +1,26 @@
 """
-Repository Knowledge Base and RAG System
-Provides intelligent querying capabilities over repository data
+Smart RAG System - Intelligent Context Gathering
+Finds exactly the right files, commits, and diffs for Claude analysis
 """
 
-import json
-import pickle
-import hashlib
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, asdict
-import numpy as np
-from datetime import datetime
-import logging
+import re
 import os
+import git
+import logging
+import tempfile
+import shutil
+import subprocess
+import json
+import numpy as np
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 @dataclass
-class RepositoryContext:
-    """Repository context for RAG system"""
-    repo_id: str
-    repo_url: str
-    total_commits: int
-    contributors: List[str]
-    primary_languages: List[str]
-    file_structure: Dict[str, Any]
-    commit_frequency: Dict[str, int]  # commits per day/week/month
-    risk_patterns: Dict[str, Any]
-
-@dataclass
-class CommitContext:
-    """Context information for a commit"""
-    commit_hash: str
-    message: str
-    author: str
-    timestamp: str
-    files_changed: List[str]
-    additions: int
-    deletions: int
-    breaking_changes: List[Dict[str, Any]]
-    risk_score: float
-    semantic_embedding: Optional[np.ndarray] = None
-
-@dataclass
-class FileContext:
-    """Context information for a file"""
-    file_path: str
-    language: str
-    size: int
-    last_modified: str
-    modification_frequency: int
-    main_contributors: List[str]
-    functions: List[str]
-    classes: List[str]
-    dependencies: List[str]
-    semantic_embedding: Optional[np.ndarray] = None
-
-@dataclass
 class QueryResult:
-    """Result from RAG query"""
+    """Beautiful response from Smart Claude"""
     query: str
     response: str
     confidence: float
@@ -66,607 +29,711 @@ class QueryResult:
     suggestions: List[str]
 
 class RepositoryKnowledgeBase:
-    """Repository knowledge base for RAG system"""
+    """Smart context gatherer that feeds Claude with perfect information"""
     
-    def __init__(self, embedding_engine, storage_path: str = "./knowledge_base"):
+    def __init__(self, git_analyzer, embedding_engine=None):
+        self.git_analyzer = git_analyzer
         self.embedding_engine = embedding_engine
-        self.storage_path = storage_path
-        self.repositories: Dict[str, RepositoryContext] = {}
-        self.commits: Dict[str, List[CommitContext]] = {}  # repo_id -> commits
-        self.files: Dict[str, List[FileContext]] = {}  # repo_id -> files
-        self.embeddings: Dict[str, np.ndarray] = {}  # content_hash -> embedding
-        
-        # Ensure storage directory exists
-        os.makedirs(storage_path, exist_ok=True)
-        
-        # Load existing data
-        self._load_knowledge_base()
-    
-    def index_repository(self, git_analyzer, repo_id: str, repo_url: str) -> None:
-        """Index a repository for RAG queries"""
-        logger.info(f"Indexing repository {repo_id}")
-        
-        try:
-            # Build repository context
-            repo_context = self._build_repository_context(git_analyzer, repo_id, repo_url)
-            self.repositories[repo_id] = repo_context
-            
-            # Index commits
-            commit_contexts = self._index_commits(git_analyzer, repo_id)
-            self.commits[repo_id] = commit_contexts
-            
-            # Index files
-            file_contexts = self._index_files(git_analyzer, repo_id)
-            self.files[repo_id] = file_contexts
-            
-            # Save to persistent storage
-            self._save_knowledge_base()
-            
-            logger.info(f"Successfully indexed repository {repo_id}")
-            
-        except Exception as e:
-            logger.error(f"Error indexing repository {repo_id}: {str(e)}")
-            raise
     
     def query(self, repo_id: str, query: str, max_results: int = 5) -> QueryResult:
-        """Query the knowledge base for information"""
-        if repo_id not in self.repositories:
-            raise ValueError(f"Repository {repo_id} not found in knowledge base")
+        """Main entry: analyze query and gather perfect context"""
         
-        # Get query embedding
-        query_embedding = self.embedding_engine.get_embedding(query)
-        if query_embedding is None:
-            return QueryResult(
-                query=query,
-                response="Unable to process query - embedding generation failed",
-                confidence=0.0,
-                sources=[],
-                context_used=[],
-                suggestions=[]
-            )
+        # Analyze what user wants
+        query_type, keywords, filters = self._analyze_query(query)
         
-        # Find relevant context
-        relevant_contexts = self._find_relevant_context(repo_id, query_embedding, max_results)
+        # Get repo context
+        repo_context = self._get_repo_context(repo_id)
         
-        # Generate response
-        response = self._generate_response(query, relevant_contexts, self.repositories[repo_id])
+        # Gather context based on query type
+        if query_type == 'file':
+            context = self._gather_file_context(repo_id, keywords, filters)
+        elif query_type == 'commit':
+            context = self._gather_commit_context(repo_id, keywords, filters)
+        elif query_type == 'author':
+            context = self._gather_author_context(repo_id, keywords, filters)
+        elif query_type == 'security':
+            context = self._gather_security_context(repo_id, keywords, filters)
+        elif query_type == 'diff':
+            context = self._gather_diff_context(repo_id, keywords, filters)
+        else:
+            context = self._gather_general_context(repo_id, keywords, filters)
         
-        return response
-    
-    def get_repository_summary(self, repo_id: str) -> Dict[str, Any]:
-        """Get comprehensive repository summary"""
-        if repo_id not in self.repositories:
-            raise ValueError(f"Repository {repo_id} not found")
+        # Calculate confidence based on context quality
+        confidence = self._calculate_confidence(context, query)
         
-        repo_context = self.repositories[repo_id]
-        commits = self.commits.get(repo_id, [])
-        files = self.files.get(repo_id, [])
-        
-        # Calculate risk metrics
-        high_risk_commits = [c for c in commits if c.risk_score > 0.7]
-        avg_risk_score = np.mean([c.risk_score for c in commits]) if commits else 0.0
-        
-        # Most active files
-        file_activity = {}
-        for commit in commits:
-            for file_path in commit.files_changed:
-                file_activity[file_path] = file_activity.get(file_path, 0) + 1
-        
-        most_active_files = sorted(file_activity.items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        return {
-            "repository": asdict(repo_context),
-            "statistics": {
-                "total_commits_indexed": len(commits),
-                "total_files_indexed": len(files),
-                "high_risk_commits": len(high_risk_commits),
-                "average_risk_score": avg_risk_score,
-                "most_active_files": most_active_files
-            },
-            "recent_activity": [
-                {
-                    "commit_hash": c.commit_hash[:8],
-                    "message": c.message[:100] + "..." if len(c.message) > 100 else c.message,
-                    "author": c.author,
-                    "risk_score": c.risk_score,
-                    "files_changed": len(c.files_changed)
-                }
-                for c in sorted(commits, key=lambda x: x.timestamp, reverse=True)[:10]
-            ]
-        }
-    
-    def search_commits(self, repo_id: str, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
-        """Search commits by query"""
-        if repo_id not in self.commits:
-            return []
-        
-        commits = self.commits[repo_id]
-        query_embedding = self.embedding_engine.get_embedding(query)
-        
-        if query_embedding is None:
-            # Fallback to text search
-            results = []
-            query_lower = query.lower()
-            for commit in commits:
-                if (query_lower in commit.message.lower() or 
-                    query_lower in commit.author.lower() or
-                    any(query_lower in f.lower() for f in commit.files_changed)):
-                    results.append(commit)
-            return [asdict(c) for c in results[:max_results]]
-        
-        # Semantic search
-        similarities = []
-        for commit in commits:
-            if commit.semantic_embedding is not None:
-                similarity = np.dot(query_embedding, commit.semantic_embedding) / (
-                    np.linalg.norm(query_embedding) * np.linalg.norm(commit.semantic_embedding)
-                )
-                similarities.append((similarity, commit))
-        
-        # Sort by similarity and return top results
-        similarities.sort(key=lambda x: x[0], reverse=True)
-        return [asdict(c[1]) for c in similarities[:max_results]]
-    
-    def search_files(self, repo_id: str, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
-        """Search files by query"""
-        if repo_id not in self.files:
-            return []
-        
-        files = self.files[repo_id]
-        query_embedding = self.embedding_engine.get_embedding(query)
-        
-        if query_embedding is None:
-            # Fallback to text search
-            results = []
-            query_lower = query.lower()
-            for file_ctx in files:
-                if (query_lower in file_ctx.file_path.lower() or
-                    any(query_lower in f.lower() for f in file_ctx.functions) or
-                    any(query_lower in c.lower() for c in file_ctx.classes)):
-                    results.append(file_ctx)
-            return [asdict(f) for f in results[:max_results]]
-        
-        # Semantic search
-        similarities = []
-        for file_ctx in files:
-            if file_ctx.semantic_embedding is not None:
-                similarity = np.dot(query_embedding, file_ctx.semantic_embedding) / (
-                    np.linalg.norm(query_embedding) * np.linalg.norm(file_ctx.semantic_embedding)
-                )
-                similarities.append((similarity, file_ctx))
-        
-        # Sort by similarity and return top results
-        similarities.sort(key=lambda x: x[0], reverse=True)
-        return [asdict(f[1]) for f in similarities[:max_results]]
-    
-    def _build_repository_context(self, git_analyzer, repo_id: str, repo_url: str) -> RepositoryContext:
-        """Build repository context"""
-        repo = git_analyzer.repo
-        
-        # Get basic stats
-        commits = list(repo.iter_commits())
-        contributors = list(set(commit.author.name for commit in commits))
-        
-        # Analyze file structure and languages
-        file_structure = {}
-        language_counts = {}
-        
-        for item in repo.head.commit.tree.traverse():
-            if item.type == 'blob':
-                path_parts = item.path.split('/')
-                current = file_structure
-                for part in path_parts[:-1]:
-                    if part not in current:
-                        current[part] = {}
-                    current = current[part]
-                current[path_parts[-1]] = {'size': item.size, 'type': 'file'}
-                
-                # Count languages
-                ext = os.path.splitext(item.path)[1].lower()
-                language_counts[ext] = language_counts.get(ext, 0) + 1
-        
-        # Get primary languages
-        primary_languages = sorted(language_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        primary_languages = [lang[0] for lang in primary_languages if lang[0]]
-        
-        # Analyze commit frequency
-        commit_frequency = self._analyze_commit_frequency(commits)
-        
-        return RepositoryContext(
-            repo_id=repo_id,
-            repo_url=repo_url,
-            total_commits=len(commits),
-            contributors=contributors,
-            primary_languages=primary_languages,
-            file_structure=file_structure,
-            commit_frequency=commit_frequency,
-            risk_patterns={}
-        )
-    
-    def _index_commits(self, git_analyzer, repo_id: str) -> List[CommitContext]:
-        """Index commits for the repository"""
-        commits = []
-        repo = git_analyzer.repo
-        
-        for commit in repo.iter_commits(max_count=1000):  # Limit for performance
-            try:
-                # Get commit diff info
-                files_changed = []
-                additions = 0
-                deletions = 0
-                
-                if commit.parents:
-                    parent = commit.parents[0]
-                    diff = parent.diff(commit)
-                    
-                    for diff_item in diff:
-                        if diff_item.a_path:
-                            files_changed.append(diff_item.a_path)
-                    
-                    # Count line changes
-                    for diff_item in diff:
-                        if diff_item.diff:
-                            diff_text = diff_item.diff.decode('utf-8', errors='ignore')
-                            additions += len([line for line in diff_text.split('\n') if line.startswith('+')])
-                            deletions += len([line for line in diff_text.split('\n') if line.startswith('-')])
-                
-                # Create commit context
-                commit_text = f"{commit.message}\n{' '.join(files_changed)}"
-                embedding = self.embedding_engine.get_embedding(commit_text)
-                
-                commit_context = CommitContext(
-                    commit_hash=commit.hexsha,
-                    message=commit.message.strip(),
-                    author=commit.author.name,
-                    timestamp=commit.committed_datetime.isoformat(),
-                    files_changed=files_changed,
-                    additions=additions,
-                    deletions=deletions,
-                    breaking_changes=[],  # Will be populated by breaking change analysis
-                    risk_score=0.0,  # Will be calculated
-                    semantic_embedding=embedding
-                )
-                
-                commits.append(commit_context)
-                
-            except Exception as e:
-                logger.warning(f"Error indexing commit {commit.hexsha}: {str(e)}")
-                continue
-        
-        return commits
-    
-    def _index_files(self, git_analyzer, repo_id: str) -> List[FileContext]:
-        """Index files for the repository"""
-        files = []
-        repo = git_analyzer.repo
-        
-        for item in repo.head.commit.tree.traverse():
-            if item.type == 'blob':
-                try:
-                    # Get file content
-                    content = item.data_stream.read().decode('utf-8', errors='ignore')
-                    
-                    # Extract metadata
-                    language = self._detect_language(item.path)
-                    functions, classes = self._extract_code_elements(content, language)
-                    dependencies = self._extract_dependencies(content, language)
-                    
-                    # Get file history
-                    commits_for_file = list(repo.iter_commits(paths=item.path, max_count=100))
-                    modification_frequency = len(commits_for_file)
-                    contributors = list(set(commit.author.name for commit in commits_for_file))
-                    
-                    # Generate embedding
-                    file_summary = f"{item.path} {language} {' '.join(functions)} {' '.join(classes)}"
-                    embedding = self.embedding_engine.get_embedding(file_summary)
-                    
-                    file_context = FileContext(
-                        file_path=item.path,
-                        language=language,
-                        size=item.size,
-                        last_modified=commits_for_file[0].committed_datetime.isoformat() if commits_for_file else "",
-                        modification_frequency=modification_frequency,
-                        main_contributors=contributors[:3],  # Top 3 contributors
-                        functions=functions,
-                        classes=classes,
-                        dependencies=dependencies,
-                        semantic_embedding=embedding
-                    )
-                    
-                    files.append(file_context)
-                    
-                except Exception as e:
-                    logger.warning(f"Error indexing file {item.path}: {str(e)}")
-                    continue
-        
-        return files
-    
-    def _analyze_commit_frequency(self, commits) -> Dict[str, int]:
-        """Analyze commit frequency patterns"""
-        from collections import defaultdict
-        
-        daily_commits = defaultdict(int)
-        weekly_commits = defaultdict(int)
-        monthly_commits = defaultdict(int)
-        
-        for commit in commits:
-            date = commit.committed_datetime.date()
-            daily_commits[str(date)] += 1
-            
-            # Get week number
-            week = date.isocalendar()[1]
-            weekly_commits[f"{date.year}-W{week}"] += 1
-            
-            # Get month
-            monthly_commits[f"{date.year}-{date.month:02d}"] += 1
-        
-        return {
-            "daily_average": len(commits) / max(len(daily_commits), 1),
-            "weekly_average": len(commits) / max(len(weekly_commits), 1),
-            "monthly_average": len(commits) / max(len(monthly_commits), 1),
-            "total_active_days": len(daily_commits),
-            "most_active_day": max(daily_commits.items(), key=lambda x: x[1])[0] if daily_commits else None
-        }
-    
-    def _detect_language(self, file_path: str) -> str:
-        """Detect programming language from file extension"""
-        ext_to_lang = {
-            '.py': 'python',
-            '.js': 'javascript',
-            '.ts': 'typescript',
-            '.java': 'java',
-            '.go': 'go',
-            '.rs': 'rust',
-            '.cpp': 'cpp',
-            '.c': 'c',
-            '.rb': 'ruby',
-            '.php': 'php',
-            '.swift': 'swift',
-            '.kt': 'kotlin',
-            '.scala': 'scala',
-            '.clj': 'clojure',
-            '.hs': 'haskell',
-            '.ml': 'ocaml',
-            '.fs': 'fsharp',
-            '.vb': 'vbnet',
-            '.cs': 'csharp',
-            '.pl': 'perl',
-            '.sh': 'bash',
-            '.ps1': 'powershell',
-            '.r': 'r',
-            '.m': 'matlab',
-            '.lua': 'lua',
-            '.dart': 'dart',
-            '.elm': 'elm',
-            '.ex': 'elixir',
-            '.erl': 'erlang',
-        }
-        
-        ext = os.path.splitext(file_path)[1].lower()
-        return ext_to_lang.get(ext, 'unknown')
-    
-    def _extract_code_elements(self, content: str, language: str) -> Tuple[List[str], List[str]]:
-        """Extract functions and classes from code"""
-        functions = []
-        classes = []
-        
-        if language == 'python':
-            import re
-            functions = re.findall(r'def\s+(\w+)\s*\(', content)
-            classes = re.findall(r'class\s+(\w+)\s*[:\(]', content)
-        elif language in ['javascript', 'typescript']:
-            import re
-            functions.extend(re.findall(r'function\s+(\w+)\s*\(', content))
-            functions.extend(re.findall(r'(\w+)\s*:\s*function', content))
-            functions.extend(re.findall(r'(\w+)\s*=\s*\([^)]*\)\s*=>', content))
-            classes = re.findall(r'class\s+(\w+)', content)
-        elif language == 'java':
-            import re
-            functions = re.findall(r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\(', content)
-            classes = re.findall(r'class\s+(\w+)', content)
-        
-        return functions[:50], classes[:20]  # Limit results
-    
-    def _extract_dependencies(self, content: str, language: str) -> List[str]:
-        """Extract dependencies from code"""
-        dependencies = []
-        
-        if language == 'python':
-            import re
-            imports = re.findall(r'from\s+(\S+)\s+import', content)
-            imports.extend(re.findall(r'import\s+(\S+)', content))
-            dependencies.extend(imports)
-        elif language in ['javascript', 'typescript']:
-            import re
-            requires = re.findall(r'require\s*\(\s*[\'"]([^\'"]+)[\'"]', content)
-            imports = re.findall(r'from\s+[\'"]([^\'"]+)[\'"]', content)
-            dependencies.extend(requires + imports)
-        elif language == 'java':
-            import re
-            imports = re.findall(r'import\s+([^;]+);', content)
-            dependencies.extend(imports)
-        
-        return dependencies[:20]  # Limit results
-    
-    def _find_relevant_context(self, repo_id: str, query_embedding: np.ndarray, max_results: int) -> List[Dict[str, Any]]:
-        """Find relevant context for query"""
-        relevant_contexts = []
-        
-        # Search commits
-        commits = self.commits.get(repo_id, [])
-        for commit in commits:
-            if commit.semantic_embedding is not None:
-                similarity = np.dot(query_embedding, commit.semantic_embedding) / (
-                    np.linalg.norm(query_embedding) * np.linalg.norm(commit.semantic_embedding)
-                )
-                relevant_contexts.append({
-                    'type': 'commit',
-                    'similarity': similarity,
-                    'data': asdict(commit)
-                })
-        
-        # Search files
-        files = self.files.get(repo_id, [])
-        for file_ctx in files:
-            if file_ctx.semantic_embedding is not None:
-                similarity = np.dot(query_embedding, file_ctx.semantic_embedding) / (
-                    np.linalg.norm(query_embedding) * np.linalg.norm(file_ctx.semantic_embedding)
-                )
-                relevant_contexts.append({
-                    'type': 'file',
-                    'similarity': similarity,
-                    'data': asdict(file_ctx)
-                })
-        
-        # Sort by similarity and return top results
-        relevant_contexts.sort(key=lambda x: x['similarity'], reverse=True)
-        return relevant_contexts[:max_results]
-    
-    def _generate_response(self, query: str, contexts: List[Dict[str, Any]], repo_context: RepositoryContext) -> QueryResult:
-        """Generate response based on query and context"""
-        # This is a simplified response generation
-        # In a full implementation, you would use Claude API here
-        
-        if not contexts:
-            return QueryResult(
-                query=query,
-                response="No relevant information found for your query.",
-                confidence=0.0,
-                sources=[],
-                context_used=[],
-                suggestions=["Try rephrasing your question", "Check if the repository has been properly indexed"]
-            )
-        
-        # Build response based on top contexts
-        response_parts = []
-        sources = []
-        context_used = []
-        
-        for ctx in contexts[:3]:  # Use top 3 contexts
-            if ctx['type'] == 'commit':
-                commit_data = ctx['data']
-                response_parts.append(f"Commit {commit_data['commit_hash'][:8]}: {commit_data['message']}")
-                sources.append({
-                    'type': 'commit',
-                    'hash': commit_data['commit_hash'],
-                    'message': commit_data['message']
-                })
-                context_used.append(f"commit:{commit_data['commit_hash'][:8]}")
-            elif ctx['type'] == 'file':
-                file_data = ctx['data']
-                response_parts.append(f"File {file_data['file_path']}: {file_data['language']} file with {len(file_data['functions'])} functions")
-                sources.append({
-                    'type': 'file',
-                    'path': file_data['file_path'],
-                    'language': file_data['language']
-                })
-                context_used.append(f"file:{file_data['file_path']}")
-        
-        response = "Based on the repository analysis:\n\n" + "\n".join(response_parts)
-        
-        # Calculate confidence based on similarity scores
-        confidence = np.mean([ctx['similarity'] for ctx in contexts[:3]]) if contexts else 0.0
-        
-        suggestions = [
-            "Ask about specific files or functions",
-            "Query about recent changes or commits",
-            "Request breaking change analysis"
+        # Create response from context
+        response_parts = [
+            f"# 📊 Smart Analysis Results",
+            f"",
+            f"**Query**: {query}",
+            f"**Analysis Type**: {query_type}",
+            f"**Context Quality**: {confidence:.0%}",
+            f"",
         ]
+        
+        # Add findings
+        if context.get('files'):
+            response_parts.extend([
+                f"## 📁 Files Found ({len(context['files'])})",
+                ""
+            ])
+            for file_data in context['files'][:8]:  # Increased from 3 to 8
+                size_kb = file_data.get('size', 0) / 1024
+                response_parts.append(f"- **{file_data['path']}** ({file_data.get('language', 'text')}, {size_kb:.1f}KB)")
+            if len(context['files']) > 8:
+                response_parts.append(f"- *...and {len(context['files']) - 8} more files*")
+            response_parts.append("")
+        
+        if context.get('commits'):
+            response_parts.extend([
+                f"## 📝 Commits Found ({len(context['commits'])})",
+                ""
+            ])
+            for commit in context['commits'][:6]:  # Increased from 3 to 6
+                response_parts.append(f"- **{commit.get('hash', '')[:8]}**: {commit.get('message', '')[:60]}...")
+            if len(context['commits']) > 6:
+                response_parts.append(f"- *...and {len(context['commits']) - 6} more commits*")
+            response_parts.append("")
+        
+        response_parts.extend([
+            f"## 💡 Summary",
+            f"",
+            f"Context gathered successfully with {confidence:.0%} confidence.",
+            f"Reasoning: {context.get('reasoning', 'General analysis')}",
+            f"",
+            f"*Configure Claude API for enhanced AI analysis.*"
+        ])
+        
+        # Create sources
+        sources = []
+        for file_data in context.get('files', []):
+            sources.append({
+                'type': 'file',
+                'path': file_data['path'],
+                'language': file_data.get('language', 'text'),
+                'size_kb': round(file_data.get('size', 0) / 1024, 1)
+            })
+        
+        for commit in context.get('commits', []):
+            sources.append({
+                'type': 'commit',
+                'hash': commit.get('hash', '')[:8],
+                'message': commit.get('message', '')[:50],
+                'author': commit.get('author', 'Unknown')
+            })
+        
+        # Create suggestions
+        suggestions = ["Configure Claude API for AI-powered analysis"]
+        if context.get('files'):
+            suggestions.append(f"Review the {len(context['files'])} relevant files")
+        if context.get('commits'):
+            suggestions.append(f"Examine the {len(context['commits'])} related commits")
         
         return QueryResult(
             query=query,
-            response=response,
+            response="\n".join(response_parts),
             confidence=confidence,
             sources=sources,
-            context_used=context_used,
+            context_used=[f"Smart context gathered: {context.get('reasoning', 'General analysis')}"],
             suggestions=suggestions
         )
     
-    def _save_knowledge_base(self):
-        """Save knowledge base to persistent storage"""
+    def _analyze_query(self, query: str) -> Tuple[str, List[str], Dict[str, Any]]:
+        """Understand what user wants"""
+        query_lower = query.lower()
+        
+        # Extract keywords
+        keywords = re.findall(r'\b\w+\b', query_lower)
+        
+        # Detect query type
+        if any(word in query_lower for word in ['file', 'function', 'class', 'method', 'code']):
+            query_type = 'file'
+        elif any(word in query_lower for word in ['commit', 'change', 'history', 'when', 'who changed']):
+            query_type = 'commit'  
+        elif any(word in query_lower for word in ['author', 'developer', 'contributor', 'who wrote']):
+            query_type = 'author'
+        elif any(word in query_lower for word in ['security', 'vulnerability', 'risk', 'exploit', 'auth']):
+            query_type = 'security'
+        elif any(word in query_lower for word in ['diff', 'difference', 'compare', 'between']):
+            query_type = 'diff'
+        else:
+            query_type = 'general'
+        
+        # Extract filters
+        filters = {}
+        
+        # Time filters
+        if 'recent' in query_lower or 'latest' in query_lower:
+            filters['time_limit'] = 30  # days
+        elif 'last week' in query_lower:
+            filters['time_limit'] = 7
+        elif 'last month' in query_lower:
+            filters['time_limit'] = 30
+        
+        # File type filters
+        file_extensions = re.findall(r'\.(\w+)', query)
+        if file_extensions:
+            filters['file_types'] = file_extensions
+        
+        # Author filters
+        author_match = re.search(r'by\s+(\w+)', query_lower)
+        if author_match:
+            filters['author'] = author_match.group(1)
+        
+        return query_type, keywords, filters
+    
+    def _get_repo_context(self, repo_id: str) -> Dict[str, Any]:
+        """Get repository overview"""
         try:
-            data = {
-                'repositories': {k: asdict(v) for k, v in self.repositories.items()},
-                'commits': {k: [asdict(c) for c in v] for k, v in self.commits.items()},
-                'files': {k: [asdict(f) for f in v] for k, v in self.files.items()},
+            # Use the git analyzer's repo directly
+            repo = self.git_analyzer.repo
+            
+            # Get basic stats
+            commits = list(repo.iter_commits(max_count=1000))
+            all_files = []
+            
+            try:
+                for item in repo.head.commit.tree.traverse():
+                    if item.type == 'blob':
+                        all_files.append(item.path)
+            except:
+                pass
+            
+            # Get language distribution
+            languages = {}
+            for file_path in all_files:
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext:
+                    languages[ext] = languages.get(ext, 0) + 1
+            
+            return {
+                'repo_id': repo_id,
+                'total_commits': len(commits),
+                'total_files': len(all_files),
+                'languages': dict(sorted(languages.items(), key=lambda x: x[1], reverse=True)[:5]),
+                'recent_activity': len([c for c in commits if (datetime.now() - c.committed_datetime.replace(tzinfo=None)) < timedelta(days=30)])
+            }
+        except Exception as e:
+            logger.error(f"Error getting repo context: {e}")
+            return {'repo_id': repo_id, 'error': str(e)}
+    
+    def _gather_file_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather file-specific context"""
+        try:
+            # Use the git analyzer's repo directly
+            repo = self.git_analyzer.repo
+            
+            files = []
+            reasoning_parts = []
+            
+            # Get all files
+            all_files = []
+            try:
+                for item in repo.head.commit.tree.traverse():
+                    if item.type == 'blob':
+                        all_files.append(item.path)
+            except:
+                pass
+            
+            # DEBUG: Log all files found in repo
+            logger.info(f"🔍 RAG DEBUG - File Analysis for query: '{' '.join(keywords)}'")
+            logger.info(f"  📁 Total files in repository: {len(all_files)}")
+            
+            # Filter by file type if specified
+            if 'file_types' in filters:
+                all_files = [f for f in all_files if any(f.endswith(f'.{ext}') for ext in filters['file_types'])]
+                reasoning_parts.append(f"Filtered to {filters['file_types']} files")
+                logger.info(f"  🔧 After file type filter: {len(all_files)} files")
+            
+            # Score files by keyword relevance
+            scored_files = []
+            for file_path in all_files:
+                score = 1  # Give every file a base score so it gets included
+                file_lower = file_path.lower()
+                
+                # High score for filename match
+                for keyword in keywords:
+                    if keyword in file_lower:
+                        score += 20
+                
+                # Score by file type relevance (expanded list)
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext in ['.py', '.js', '.ts', '.jsx', '.tsx', '.vue', '.java', '.cpp', '.c', '.h', 
+                          '.cs', '.rb', '.php', '.go', '.rs', '.swift', '.kt', '.scala', '.r', 
+                          '.sql', '.html', '.css', '.scss', '.less', '.json', '.xml', '.yaml', '.yml',
+                          '.md', '.txt', '.sh', '.bat', '.ps1', '.dockerfile']:
+                    score += 10
+                
+                # Boost for important files
+                filename = os.path.basename(file_path).lower()
+                if any(name in filename for name in ['main', 'index', 'app', 'server', 'client', 
+                                                   'config', 'setup', 'init', 'readme', 'api',
+                                                   'model', 'view', 'controller', 'service', 'utils']):
+                    score += 15
+                
+                # Only slightly reduce test files, don't exclude them
+                if 'test' not in ' '.join(keywords) and ('test' in file_lower or 'spec' in file_lower):
+                    score -= 3  # Much smaller penalty
+                
+                # Include all files, even with score 0
+                scored_files.append((file_path, score))
+            
+            # Sort by score and take more files
+            scored_files.sort(key=lambda x: x[1], reverse=True)
+            top_files = scored_files[:20]  # Increased from 5 to 20 files
+            
+            # DEBUG: Log file scoring results
+            logger.info(f"  📊 File scoring completed:")
+            logger.info(f"    🥇 Top 20 scored files (showing top 10):")
+            for i, (file_path, score) in enumerate(top_files[:10]):
+                logger.info(f"      {i+1}. {file_path} (score: {score})")
+            if len(top_files) > 10:
+                logger.info(f"      ... and {len(top_files)-10} more files")
+            
+            # Get file contents
+            for file_path, score in top_files:
+                try:
+                    file_content = repo.head.commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                    
+                    # Determine language
+                    ext = os.path.splitext(file_path)[1].lower()
+                    language_map = {
+                        '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+                        '.jsx': 'javascript', '.tsx': 'typescript', '.vue': 'vue',
+                        '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.h': 'c',
+                        '.rs': 'rust', '.go': 'go', '.rb': 'ruby', '.php': 'php',
+                        '.cs': 'csharp', '.swift': 'swift', '.kt': 'kotlin',
+                        '.md': 'markdown', '.txt': 'text', '.json': 'json',
+                        '.xml': 'xml', '.html': 'html', '.css': 'css', '.scss': 'scss',
+                        '.sql': 'sql', '.sh': 'bash', '.bat': 'batch'
+                    }
+                    language = language_map.get(ext, 'text')
+                    
+                    files.append({
+                        'path': file_path,
+                        'content': file_content,
+                        'language': language,
+                        'score': score,
+                        'size': len(file_content)
+                    })
+                    
+                    # DEBUG: Log file content details
+                    logger.info(f"    📄 Loaded: {file_path} ({language}, {len(file_content):,} chars, score: {score})")
+                    
+                except Exception as e:
+                    logger.debug(f"Could not read file {file_path}: {e}")
+            
+            reasoning_parts.append(f"Found {len(files)} relevant files")
+            logger.info(f"  ✅ Final result: {len(files)} files loaded with content")
+            
+            return {
+                'files': files,
+                'reasoning': '; '.join(reasoning_parts) if reasoning_parts else 'File analysis'
             }
             
-            with open(os.path.join(self.storage_path, 'knowledge_base.json'), 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-                
-            # Save embeddings separately
-            with open(os.path.join(self.storage_path, 'embeddings.pkl'), 'wb') as f:
-                pickle.dump(self.embeddings, f)
-                
         except Exception as e:
-            logger.error(f"Error saving knowledge base: {str(e)}")
+            logger.error(f"Error gathering file context: {e}")
+            return {'files': [], 'reasoning': f'Error: {e}'}
     
-    def _load_knowledge_base(self):
-        """Load knowledge base from persistent storage"""
+    def _gather_commit_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather commit-specific context"""
         try:
-            kb_path = os.path.join(self.storage_path, 'knowledge_base.json')
-            if os.path.exists(kb_path):
-                with open(kb_path, 'r') as f:
-                    data = json.load(f)
-                
-                # Load repositories
-                for repo_id, repo_data in data.get('repositories', {}).items():
-                    self.repositories[repo_id] = RepositoryContext(**repo_data)
-                
-                # Load commits
-                for repo_id, commits_data in data.get('commits', {}).items():
-                    self.commits[repo_id] = [CommitContext(**c) for c in commits_data]
-                
-                # Load files
-                for repo_id, files_data in data.get('files', {}).items():
-                    self.files[repo_id] = [FileContext(**f) for f in files_data]
+            # Use the git analyzer's repo directly
+            repo = self.git_analyzer.repo
             
-            # Load embeddings
-            emb_path = os.path.join(self.storage_path, 'embeddings.pkl')
-            if os.path.exists(emb_path):
-                with open(emb_path, 'rb') as f:
-                    self.embeddings = pickle.load(f)
+            commits = []
+            reasoning_parts = []
+            
+            # Get commits with time filter
+            max_count = 500  # Increased from 100 to 500 for better coverage
+            if 'time_limit' in filters:
+                since_date = datetime.now() - timedelta(days=filters['time_limit'])
+                commit_iter = repo.iter_commits(since=since_date, max_count=max_count)
+                reasoning_parts.append(f"Last {filters['time_limit']} days")
+            else:
+                commit_iter = repo.iter_commits(max_count=max_count)
+            
+            # Score commits by relevance
+            scored_commits = []
+            for commit in commit_iter:
+                score = 0
+                commit_text = f"{commit.message} {commit.author.name}".lower()
+                
+                # Score by keyword match
+                for keyword in keywords:
+                    if keyword in commit_text:
+                        score += 10
+                
+                # Score by files changed
+                try:
+                    if commit.parents:
+                        files_changed = len(commit.stats.files)
+                        if files_changed > 1:
+                            score += min(files_changed, 5)
+                except:
+                    pass
+                
+                # Give every commit a base score to include more commits
+                if score == 0:
+                    score = 1
+                
+                scored_commits.append((commit, score))
+            
+            # Sort and take top commits
+            scored_commits.sort(key=lambda x: x[1], reverse=True)
+            top_commits = scored_commits[:25]  # Increased from 10 to 25 commits
+            
+            # Get commit details with diffs
+            for commit, score in top_commits:
+                try:
+                    commit_data = {
+                        'hash': commit.hexsha,
+                        'message': commit.message.strip(),
+                        'author': commit.author.name,
+                        'email': commit.author.email,
+                        'date': commit.committed_datetime.isoformat(),
+                        'score': score,
+                        'files_changed': []
+                    }
                     
+                    # Get diff for this commit
+                    if commit.parents:
+                        diffs = commit.parents[0].diff(commit, create_patch=True)
+                        for diff_item in diffs:
+                            if diff_item.a_path:
+                                commit_data['files_changed'].append({
+                                    'file': diff_item.a_path,
+                                    'change_type': diff_item.change_type,
+                                    'diff': str(diff_item)[:2000]  # Limit diff size
+                                })
+                    
+                    commits.append(commit_data)
+                    
+                except Exception as e:
+                    logger.debug(f"Error processing commit {commit.hexsha}: {e}")
+            
+            reasoning_parts.append(f"Found {len(commits)} relevant commits")
+            
+            return {
+                'commits': commits,
+                'reasoning': '; '.join(reasoning_parts) if reasoning_parts else 'Commit analysis'
+            }
+            
         except Exception as e:
-            logger.error(f"Error loading knowledge base: {str(e)}")
-            # Initialize empty if loading fails
-            self.repositories = {}
-            self.commits = {}
-            self.files = {}
-            self.embeddings = {}
+            logger.error(f"Error gathering commit context: {e}")
+            return {'commits': [], 'reasoning': f'Error: {e}'}
+    
+    def _gather_author_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather author-specific context"""
+        # Reuse commit gathering but filter by author
+        if 'author' not in filters and keywords:
+            # Try to extract author from keywords
+            filters['author'] = keywords[0]
+        
+        context = self._gather_commit_context(repo_id, keywords, filters)
+        
+        if 'author' in filters:
+            # Filter commits by author
+            author_filter = filters['author'].lower()
+            filtered_commits = []
+            for commit in context.get('commits', []):
+                if author_filter in commit.get('author', '').lower() or author_filter in commit.get('email', '').lower():
+                    filtered_commits.append(commit)
+            
+            context['commits'] = filtered_commits
+            context['reasoning'] = f"Author analysis for '{filters['author']}'"
+        
+        return context
+    
+    def _gather_security_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather security-specific context"""
+        # Get both files and commits, focus on security patterns
+        file_context = self._gather_file_context(repo_id, keywords + ['auth', 'password', 'token', 'secret'], filters)
+        commit_context = self._gather_commit_context(repo_id, keywords + ['security', 'fix', 'vulnerability'], filters)
+        
+        # Filter for security-relevant content
+        security_files = []
+        for file_data in file_context.get('files', []):
+            content = file_data['content'].lower()
+            if any(pattern in content for pattern in ['password', 'secret', 'token', 'auth', 'login', 'security']):
+                file_data['security_score'] = 10
+                security_files.append(file_data)
+        
+        return {
+            'files': security_files,
+            'commits': commit_context.get('commits', []),
+            'reasoning': 'Security analysis'
+        }
+    
+    def _gather_diff_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather diff-specific context"""
+        # Focus on commits with substantial changes
+        commit_context = self._gather_commit_context(repo_id, keywords, filters)
+        
+        # Enhance with more detailed diffs
+        enhanced_commits = []
+        for commit in commit_context.get('commits', []):
+            if len(commit.get('files_changed', [])) > 0:
+                enhanced_commits.append(commit)
+        
+        return {
+            'commits': enhanced_commits[:5],  # Limit to 5 for detailed diff analysis
+            'reasoning': 'Diff analysis'
+        }
+    
+    def _gather_general_context(self, repo_id: str, keywords: List[str], filters: Dict[str, Any]) -> Dict[str, Any]:
+        """Gather general context when query type is unclear"""
+        try:
+            # Get both files and commits with lower limits
+            file_context = self._gather_file_context(repo_id, keywords, filters)
+            commit_context = self._gather_commit_context(repo_id, keywords, filters)
+            
+            # If no specific files found, try to get some general interesting files
+            files = file_context.get('files', [])
+            if not files:
+                # Get some main files like README, main files, etc.
+                repo = self.git_analyzer.repo
+                interesting_files = []
+                try:
+                    for item in repo.head.commit.tree.traverse():
+                        if item.type == 'blob':
+                            file_path = item.path
+                            if any(name in file_path.lower() for name in ['readme', 'main', 'index', 'app', 'server', 
+                                                                         'config', 'setup', 'api', 'model', 'view', 
+                                                                         'controller', 'service', 'utils', 'component',
+                                                                         'router', 'middleware', 'database', 'db']):
+                                try:
+                                    file_content = item.data_stream.read().decode('utf-8', errors='ignore')
+                                    ext = os.path.splitext(file_path)[1].lower()
+                                    language_map = {
+                                        '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+                                        '.jsx': 'javascript', '.tsx': 'typescript', '.vue': 'vue',
+                                        '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.h': 'c',
+                                        '.rs': 'rust', '.go': 'go', '.rb': 'ruby', '.php': 'php',
+                                        '.cs': 'csharp', '.swift': 'swift', '.kt': 'kotlin',
+                                        '.md': 'markdown', '.txt': 'text', '.json': 'json',
+                                        '.xml': 'xml', '.html': 'html', '.css': 'css', '.scss': 'scss'
+                                    }
+                                    language = language_map.get(ext, 'text')
+                                    
+                                    interesting_files.append({
+                                        'path': file_path,
+                                        'content': file_content,
+                                        'language': language,
+                                        'score': 5,
+                                        'size': len(file_content)
+                                    })
+                                    
+                                    if len(interesting_files) >= 15:  # Increased from 3 to 15
+                                        break
+                                except:
+                                    pass
+                except:
+                    pass
+                
+                files = interesting_files
+                
+                # If still not enough files, add some random files to ensure broad coverage
+                if len(files) < 10:
+                    try:
+                        additional_files = []
+                        file_paths_already_included = {f['path'] for f in files}
+                        
+                        for item in repo.head.commit.tree.traverse():
+                            if item.type == 'blob' and item.path not in file_paths_already_included:
+                                # Skip binary files and very large files
+                                if item.size > 50000:  # Skip files larger than 50KB
+                                    continue
+                                    
+                                ext = os.path.splitext(item.path)[1].lower()
+                                # Focus on code and config files
+                                if ext in ['.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h',
+                                          '.cs', '.rb', '.php', '.go', '.rs', '.swift', '.kt', '.scala',
+                                          '.json', '.xml', '.yaml', '.yml', '.md', '.txt', '.sql',
+                                          '.html', '.css', '.scss', '.less', '.sh', '.bat']:
+                                    try:
+                                        file_content = item.data_stream.read().decode('utf-8', errors='ignore')
+                                        language_map = {
+                                            '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+                                            '.jsx': 'javascript', '.tsx': 'typescript', '.vue': 'vue',
+                                            '.java': 'java', '.cpp': 'cpp', '.c': 'c', '.h': 'c',
+                                            '.rs': 'rust', '.go': 'go', '.rb': 'ruby', '.php': 'php',
+                                            '.cs': 'csharp', '.swift': 'swift', '.kt': 'kotlin',
+                                            '.md': 'markdown', '.txt': 'text', '.json': 'json',
+                                            '.xml': 'xml', '.html': 'html', '.css': 'css', '.scss': 'scss',
+                                            '.sql': 'sql', '.sh': 'bash', '.bat': 'batch'
+                                        }
+                                        language = language_map.get(ext, 'text')
+                                        
+                                        additional_files.append({
+                                            'path': item.path,
+                                            'content': file_content,
+                                            'language': language,
+                                            'score': 2,  # Lower score for random files
+                                            'size': len(file_content)
+                                        })
+                                        
+                                        if len(files) + len(additional_files) >= 20:
+                                            break
+                                    except:
+                                        pass
+                        
+                        files.extend(additional_files)
+                    except:
+                        pass
+            
+            # If no specific commits found, get recent commits
+            commits = commit_context.get('commits', [])
+            if not commits:
+                try:
+                    repo = self.git_analyzer.repo
+                    recent_commits = []
+                    for commit in repo.iter_commits(max_count=5):
+                        try:
+                            commit_data = {
+                                'hash': commit.hexsha,
+                                'message': commit.message.strip(),
+                                'author': commit.author.name,
+                                'email': commit.author.email,
+                                'date': commit.committed_datetime.isoformat(),
+                                'score': 3,
+                                'files_changed': []
+                            }
+                            
+                            # Get basic diff info
+                            if commit.parents:
+                                try:
+                                    files_changed = len(commit.stats.files)
+                                    commit_data['files_changed'] = [{'file': f'~{files_changed} files changed'}]
+                                except:
+                                    pass
+                            
+                            recent_commits.append(commit_data)
+                        except:
+                            pass
+                    
+                    commits = recent_commits
+                except:
+                    pass
+            
+            return {
+                'files': files[:10],  # Increased from 3 to 10 files
+                'commits': commits[:8],  # Increased from 5 to 8 commits
+                'reasoning': 'General analysis with repository overview'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error gathering general context: {e}")
+            return {
+                'files': [],
+                'commits': [],
+                'reasoning': f'General analysis (with errors: {e})'
+            }
+    
+    def _calculate_confidence(self, context: Dict[str, Any], query: str) -> float:
+        """Calculate confidence score based on context quality"""
+        score = 0.5  # Base score
+        
+        # Boost for relevant files found
+        files = context.get('files', [])
+        if files:
+            score += min(len(files) * 0.1, 0.3)
+        
+        # Boost for relevant commits found
+        commits = context.get('commits', [])
+        if commits:
+            score += min(len(commits) * 0.05, 0.2)
+        
+        # Boost for high-scoring content
+        if files:
+            avg_file_score = sum(f.get('score', 0) for f in files) / len(files)
+            score += min(avg_file_score / 100, 0.2)
+        
+        return min(score, 0.95)  # Cap at 95%
     
     def index_repository(self, git_analyzer, repo_id: str, repo_url: str):
-        """Index repository for RAG (stub implementation)"""
-        self.repositories[repo_id] = {
-            "url": repo_url,
-            "indexed": True,
-            "git_analyzer": git_analyzer
-        }
-        logger.info(f"Indexed repository {repo_id} (stub)")
-    
-    def query(self, repo_id: str, query: str, max_results: int = 10) -> QueryResult:
-        """Query repository knowledge (stub implementation)"""
-        return QueryResult(
-            query=query,
-            response="RAG system not fully implemented yet.",
-            confidence=0.0,
-            sources=[],
-            context_used=[],
-            suggestions=["Implement full RAG system"]
-        )
+        """Index repository for smart queries"""
+        try:
+            logger.info(f"Indexing repository {repo_id}")
+            # Store git analyzer reference
+            self.git_analyzer = git_analyzer
+            
+            # Get repo context for future queries
+            self.repo_context = self._get_repo_context(repo_id)
+            logger.info(f"Successfully indexed repository {repo_id}")
+        except Exception as e:
+            logger.error(f"Error indexing repository {repo_id}: {e}")
     
     def get_repository_summary(self, repo_id: str) -> Dict[str, Any]:
-        """Get repository summary (stub implementation)"""
-        return {
-            "repo_id": repo_id,
-            "status": "stub",
-            "recent_activity": []
-        }
+        """Get repository summary"""
+        if not hasattr(self, 'git_analyzer') or not self.git_analyzer:
+            return {"error": "Repository not indexed"}
+        
+        try:
+            repo_context = self._get_repo_context(repo_id)
+            
+            # Get recent commits
+            repo = self.git_analyzer.repo
+            commits = list(repo.iter_commits(max_count=50))
+            
+            recent_activity = []
+            for commit in commits[:10]:
+                try:
+                    files_changed = len(commit.stats.files) if commit.parents else 0
+                    recent_activity.append({
+                        "commit_hash": commit.hexsha,
+                        "message": commit.message.strip(),
+                        "author": commit.author.name,
+                        "risk_score": 0.5,  # Default risk score
+                        "files_changed": files_changed
+                    })
+                except:
+                    pass
+            
+            return {
+                "repository": repo_context,
+                "statistics": {
+                    "total_commits_indexed": len(commits),
+                    "total_files_indexed": repo_context.get('total_files', 0),
+                    "high_risk_commits": 0,
+                    "average_risk_score": 0.5
+                },
+                "recent_activity": recent_activity
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting repository summary: {e}")
+            return {"error": str(e)}
     
-    def search_commits(self, repo_id: str, query: str, max_results: int) -> List[Dict]:
-        """Search commits (stub implementation)"""
-        return []
+    def search_commits(self, repo_id: str, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+        """Search commits by query"""
+        try:
+            # Use the same smart context gathering for commits
+            context = self._gather_commit_context(repo_id, [query], {})
+            commits = context.get('commits', [])
+            return commits[:max_results]
+        except Exception as e:
+            logger.error(f"Error searching commits: {e}")
+            return []
     
-    def search_files(self, repo_id: str, query: str, max_results: int) -> List[Dict]:
-        """Search files (stub implementation)"""
-        return []
+    def search_files(self, repo_id: str, query: str, max_results: int = 10) -> List[Dict[str, Any]]:
+        """Search files by query"""
+        try:
+            # Use the same smart context gathering for files
+            context = self._gather_file_context(repo_id, [query], {})
+            files = context.get('files', [])
+            
+            # Convert to expected format
+            file_results = []
+            for file_data in files[:max_results]:
+                file_results.append({
+                    'file_path': file_data['path'],
+                    'language': file_data.get('language', 'text'),
+                    'size': file_data.get('size', 0),
+                    'score': file_data.get('score', 0)
+                })
+            
+            return file_results
+        except Exception as e:
+            logger.error(f"Error searching files: {e}")
+            return []
