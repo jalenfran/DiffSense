@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Union
 import tempfile
 import shutil
 import os
+import sqlite3
 import subprocess
 import secrets
 from datetime import datetime, timedelta
@@ -65,22 +66,21 @@ def _parse_context_used(context_used_str: str) -> List[Dict[str, Any]]:
 
 from src.config import config
 from src.git_analyzer import GitAnalyzer
-from src.breaking_change_detector import BreakingChangeDetector, CommitBreakingChangeAnalysis
-from src.rag_system import RepositoryKnowledgeBase
+# Legacy imports removed - using enhanced systems only
 from src.claude_analyzer import ClaudeAnalyzer, SmartContext
 from src.embedding_engine import SemanticAnalyzer, TextEmbedder, CodeEmbedder
 from src.database import DatabaseManager, User, Chat, ChatMessage, Commit, Repository, CommitAnalysis, RepositoryDashboard, FileContent, FileHistory, CommitFileCache
 from src.storage_manager import RepositoryStorageManager
 from src.github_service import GitHubService
 # Enhanced intelligent systems
-from src.smart_code_analyzer import SmartCodeAnalyzer
-from src.enhanced_rag_system import EnhancedRAGSystem
-from src.advanced_claude_analyzer import AdvancedClaudeAnalyzer
-from src.smart_suggestions_engine import SmartSuggestionsEngine
+from src.code_analyzer import CodeAnalyzer
+from src.rag_system import RAGSystem
+from src.claude_analyzer import ClaudeAnalyzer
+from src.suggestions_engine import SuggestionsEngine
 
 # Advanced Breaking Change Detection imports
-from src.advanced_breaking_change_detector import (
-    AdvancedBreakingChangeDetector, 
+from src.breaking_change_detector import (
+    BreakingChangeDetector, 
     BreakingChange, 
     ChangeType, 
     ImpactSeverity,
@@ -117,15 +117,7 @@ class QueryRequest(BaseModel):
     query: str
     max_results: int = 10
 
-# Legacy models (kept for backwards compatibility but will be deprecated)
-class AnalyzeFileRequest(BaseModel):
-    file_path: str
-    max_commits: int = 50
-
-class AnalyzeFunctionRequest(BaseModel):
-    file_path: str
-    function_name: str
-    max_commits: int = 50
+# Removed legacy models - no longer needed
 
 class CommitAnalysisRequest(BaseModel):
     commit_hash: str
@@ -261,11 +253,11 @@ class RepositoryStatsResponse(BaseModel):
 from src.database import DatabaseManager
 from src.storage_manager import RepositoryStorageManager
 
-# Initialize global services
+# Initialize AI systems
 semantic_analyzer = SemanticAnalyzer()
 claude_analyzer = ClaudeAnalyzer()
-rag_system = RepositoryKnowledgeBase(semantic_analyzer, claude_analyzer=claude_analyzer)
-breaking_change_detector = BreakingChangeDetector(semantic_analyzer)
+rag_system = RAGSystem(git_analyzer=None, claude_analyzer=claude_analyzer)
+breaking_change_detector = BreakingChangeDetector(git_analyzer=None, claude_analyzer=claude_analyzer)
 github_service = GitHubService()
 
 # Initialize database and storage
@@ -637,10 +629,10 @@ async def send_chat_message(
         if chat.repo_id and chat.repo_id in active_repos:
             # Repository-specific query - create RAG system with specific git_analyzer
             git_analyzer = active_repos[chat.repo_id]
-            repo_rag_system = RepositoryKnowledgeBase(git_analyzer, claude_analyzer=claude_analyzer)
-            rag_result = repo_rag_system.query(chat.repo_id, request.message, max_results=10)
+            repo_rag_system = RAGSystem(git_analyzer, claude_analyzer=claude_analyzer)
+            rag_result = repo_rag_system.enhanced_query(chat.repo_id, request.message, max_results=10)
             query_type = "repository"
-            claude_enhanced = True  # RAG system doesn't track this, only enhanced endpoints do
+            claude_enhanced = True  # RAG system provides enhanced analysis
         else:
             # General query (fallback response)
             rag_result = RepositoryQueryResponse(
@@ -789,75 +781,7 @@ async def archive_chat(chat_id: str, current_user: str = Depends(require_auth)):
         logger.error(f"Error archiving chat: {e}")
         raise HTTPException(status_code=500, detail="Failed to archive chat")
 
-# ===== LEGACY ENDPOINTS (DEPRECATED) =====
-
-@app.post("/api/analyze-file/{repo_id}")
-async def analyze_file_drift(repo_id: str, request: AnalyzeFileRequest):
-    """[DEPRECATED] Analyze semantic drift for a specific file - use enhanced query endpoints instead"""
-    logger.warning("analyze-file endpoint is deprecated. Use /api/repository/{repo_id}/file/{file_path}/insights instead")
-    
-    try:
-        if repo_id not in active_repos:
-            raise HTTPException(status_code=404, detail="Repository not found. Please clone first.")
-        
-        git_analyzer = active_repos[repo_id]
-        
-        # For now, return basic file information
-        commits = git_analyzer.get_commits_for_file(request.file_path, request.max_commits)
-        
-        # Return simplified response
-        return {
-            "feature_id": f"file_{request.file_path}",
-            "file_path": request.file_path,
-            "function_name": None,
-            "overall_drift": 0.0,
-            "total_commits": len(commits),
-            "drift_events": [],
-            "change_summary": {"total_changes": len(commits)},
-            "timeline": [],
-            "risk_assessment": {"risk_level": "unknown"},
-            "deprecated": True,
-            "recommended_endpoint": f"/api/repository/{repo_id}/file/{request.file_path}/insights"
-        }
-        
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-@app.post("/api/analyze-function/{repo_id}")
-async def analyze_function_drift(repo_id: str, request: AnalyzeFunctionRequest):
-    """[DEPRECATED] Analyze semantic drift for a specific function - use enhanced query endpoints instead"""
-    logger.warning("analyze-function endpoint is deprecated. Use enhanced query endpoints instead")
-    
-    try:
-        if repo_id not in active_repos:
-            raise HTTPException(status_code=404, detail="Repository not found. Please clone first.")
-        
-        git_analyzer = active_repos[repo_id]
-        
-        # For now, return basic function information
-        commits = git_analyzer.get_commits_for_function(request.file_path, request.function_name, request.max_commits)
-        
-        # Return simplified response
-        return {
-            "feature_id": f"function_{request.function_name}",
-            "file_path": request.file_path,
-            "function_name": request.function_name,
-            "overall_drift": 0.0,
-            "total_commits": len(commits),
-            "drift_events": [],
-            "change_summary": {"total_changes": len(commits)},
-            "timeline": [],
-            "risk_assessment": {"risk_level": "unknown"},
-            "deprecated": True,
-            "recommended_endpoint": f"/api/query-repository/{repo_id}"
-        }
-        
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+# ===== Legacy endpoints removed - all functionality moved to enhanced systems =====
 
 @app.get("/api/repository/{repo_id}/files")
 async def list_repository_files(
@@ -920,8 +844,14 @@ async def cleanup_repository(
     repo_id: str,
     current_user: str = Depends(require_repository_access)
 ):
-    """Clean up repository resources"""
+    """Clean up repository resources completely - filesystem and database"""
     try:
+        # Get repository details before deletion
+        repository = db_manager.get_repository(repo_id)
+        if not repository:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        # Clean up in-memory resources
         if repo_id in active_repos:
             del active_repos[repo_id]
         
@@ -930,10 +860,77 @@ async def cleanup_repository(
             shutil.rmtree(temp_dir, ignore_errors=True)
             del temp_dirs[repo_id]
         
-        return {"message": f"Repository {repo_id} cleaned up successfully"}
+        # Clean up filesystem - remove repository directory
+        repo_local_path = repository.local_path
+        if repo_local_path and os.path.exists(repo_local_path):
+            logger.info(f"Removing repository directory: {repo_local_path}")
+            shutil.rmtree(repo_local_path, ignore_errors=True)
         
+        # Also check common storage paths
+        storage_paths_to_check = [
+            f"./repos/active/{repo_id}",
+            f"./repos/cache/{repo_id}",
+            f"./repos/temp/{repo_id}",
+            f"./knowledge_base/{repo_id}"
+        ]
+        
+        for path in storage_paths_to_check:
+            if os.path.exists(path):
+                logger.info(f"Removing storage path: {path}")
+                shutil.rmtree(path, ignore_errors=True)
+        
+        # Clean up database - remove all related data
+        success = await _cleanup_repository_from_database(repo_id)
+        
+        if not success:
+            logger.warning(f"Some database cleanup may have failed for repo {repo_id}")
+        
+        return {
+            "message": f"Repository {repo_id} completely cleaned up",
+            "filesystem_cleaned": True,
+            "database_cleaned": success
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Cleanup failed for repository {repo_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+async def _cleanup_repository_from_database(repo_id: str) -> bool:
+    """Comprehensive database cleanup for a repository"""
+    try:
+        import sqlite3
+        
+        with sqlite3.connect(db_manager.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Delete from all tables that reference this repository
+            cleanup_queries = [
+                "DELETE FROM file_history WHERE repo_id = ?",
+                "DELETE FROM file_content WHERE repo_id = ?", 
+                "DELETE FROM commit_file_cache WHERE repo_id = ?",
+                "DELETE FROM repository_dashboards WHERE repo_id = ?",
+                "DELETE FROM commit_analysis WHERE repo_id = ?",
+                "DELETE FROM chat_messages WHERE chat_id IN (SELECT id FROM chats WHERE repo_id = ?)",
+                "DELETE FROM chats WHERE repo_id = ?",
+                "DELETE FROM files WHERE repo_id = ?",
+                "DELETE FROM commits WHERE repo_id = ?",
+                "DELETE FROM repositories WHERE id = ?"
+            ]
+            
+            # Execute cleanup queries
+            for query in cleanup_queries:
+                cursor.execute(query, (repo_id,))
+                logger.info(f"Executed cleanup query: {query} for repo {repo_id}")
+            
+            conn.commit()
+            logger.info(f"Database cleanup completed for repository {repo_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Database cleanup failed for repository {repo_id}: {e}")
+        return False
 
 @app.get("/api/repository/{repo_id}/commits")
 async def get_repository_commits(
@@ -1339,8 +1336,8 @@ async def query_repository(repo_id: str, request: QueryRepositoryRequest):
         git_analyzer = active_repos[repo_id]
         
         # Step 1: Smart Code Analysis - Deep understanding of repository structure
-        from src.smart_code_analyzer import SmartCodeAnalyzer
-        code_analyzer = SmartCodeAnalyzer()
+        from src.code_analyzer import CodeAnalyzer
+        code_analyzer = CodeAnalyzer()
         
         # Analyze repository structure and get relevant files
         relevant_files = code_analyzer.find_relevant_files(git_analyzer, request.query)
@@ -1355,8 +1352,8 @@ async def query_repository(repo_id: str, request: QueryRepositoryRequest):
                 continue
         
         # Step 2: Enhanced RAG with intelligent context gathering
-        from src.enhanced_rag_system import EnhancedRAGSystem
-        enhanced_rag = EnhancedRAGSystem(semantic_analyzer, claude_analyzer)
+        from src.rag_system import RAGSystem
+        enhanced_rag = RAGSystem(semantic_analyzer, claude_analyzer)
         
         # Get intelligent query analysis
         query_analysis = enhanced_rag.analyze_query_intent(request.query)
@@ -1367,8 +1364,8 @@ async def query_repository(repo_id: str, request: QueryRepositoryRequest):
         )
         
         # Step 3: Multi-Expert Claude Analysis
-        from src.advanced_claude_analyzer import AdvancedClaudeAnalyzer
-        advanced_claude = AdvancedClaudeAnalyzer()
+        from src.claude_analyzer import ClaudeAnalyzer
+        advanced_claude = ClaudeAnalyzer()
         
         expert_analyses = {}
         specialized_data = context.get('specialized_analysis', {})
@@ -1392,8 +1389,8 @@ async def query_repository(repo_id: str, request: QueryRepositoryRequest):
             }
         
         # Step 4: Smart Suggestions Generation
-        from src.smart_suggestions_engine import SmartSuggestionsEngine
-        suggestions_engine = SmartSuggestionsEngine()
+        from src.suggestions_engine import SuggestionsEngine
+        suggestions_engine = SuggestionsEngine()
         
         smart_suggestions = suggestions_engine.generate_comprehensive_suggestions(
             request.query, context, file_analyses, expert_analyses
@@ -1599,30 +1596,63 @@ async def get_risk_dashboard(
         analyzed_commits = {analysis.commit_hash: analysis 
                           for analysis in db_manager.get_repository_commit_analyses(repo_id, limit=200)}
         
-        # Analyze only new commits
+        # Analyze only new commits using advanced breaking change detector
         new_analyses = []
         for commit in recent_commits[:50]:  # Limit to 50 most recent for dashboard
             if commit.hexsha not in analyzed_commits:
                 try:
-                    logger.info(f"Analyzing new commit: {commit.hexsha[:8]}")
+                    logger.info(f"🔍 Advanced analysis for commit: {commit.hexsha[:8]}")
+                    # Use the advanced breaking change detector
+                    breaking_changes = breaking_change_detector.analyze_commit_for_breaking_changes(commit.hexsha, git_analyzer)
+                    
+                    # Calculate enhanced risk metrics
+                    critical_changes = [bc for bc in breaking_changes if bc.severity.value == "critical"]
+                    high_changes = [bc for bc in breaking_changes if bc.severity.value == "high"]
+                    accidental_changes = [bc for bc in breaking_changes if bc.intent.value == "accidental"]
+                    
+                    # Enhanced risk score calculation
+                    risk_score = 0.0
+                    if breaking_changes:
+                        severity_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2, "enhancement": 0.1}
+                        intent_weights = {"accidental": 1.5, "unclear": 1.2, "intentional": 1.0}
+                        
+                        total_weight = 0
+                        for bc in breaking_changes:
+                            severity_weight = severity_weights.get(bc.severity.value, 0.5)
+                            intent_weight = intent_weights.get(bc.intent.value, 1.0)
+                            migration_complexity_weight = {"very_complex": 1.5, "complex": 1.3, "moderate": 1.1, "easy": 0.9, "trivial": 0.7}.get(bc.migration_complexity, 1.0)
+                            
+                            change_risk = severity_weight * intent_weight * migration_complexity_weight * bc.confidence_score
+                            total_weight += change_risk
+                        
+                        risk_score = min(total_weight / len(breaking_changes), 1.0)
+                    
+                    # Get basic analysis for backward compatibility
                     analysis = breaking_change_detector.analyze_commit(git_analyzer, commit.hexsha)
                     
-                    # Save analysis to database
+                    # Enhanced commit analysis with advanced detector data
                     commit_analysis = CommitAnalysis(
                         id=f"{repo_id}_{commit.hexsha}",
                         repo_id=repo_id,
                         commit_hash=commit.hexsha,
-                        overall_risk_score=float(analysis.overall_risk_score),
-                        breaking_changes_count=len(analysis.breaking_changes),
+                        overall_risk_score=float(max(risk_score, analysis.overall_risk_score)),  # Use higher of the two calculations
+                        breaking_changes_count=len(breaking_changes),
                         complexity_score=float(analysis.complexity_score),
                         semantic_drift_score=float(analysis.semantic_drift_score),
                         files_changed=json.dumps(analysis.files_changed),
                         breaking_changes=json.dumps([{
                             "change_type": bc.change_type.value,
-                            "risk_level": bc.risk_level.value,
+                            "severity": bc.severity.value,
+                            "intent": bc.intent.value,
+                            "confidence_score": bc.confidence_score,
                             "file_path": bc.file_path,
-                            "description": bc.description
-                        } for bc in analysis.breaking_changes]),
+                            "description": bc.description,
+                            "migration_complexity": bc.migration_complexity,
+                            "affected_users_estimate": bc.affected_users_estimate,
+                            "detection_methods": bc.detection_methods,
+                            "old_signature": bc.old_signature,
+                            "new_signature": bc.new_signature
+                        } for bc in breaking_changes]),
                         analyzed_at=datetime.now().isoformat()
                     )
                     
@@ -1634,14 +1664,26 @@ async def get_risk_dashboard(
                     logger.error(f"Error analyzing commit {commit.hexsha}: {e}")
                     continue
         
-        # Generate dashboard from all analyzed commits
+        # Generate enhanced dashboard from all analyzed commits
         risk_data = {
             "total_commits_analyzed": len(analyzed_commits),
             "high_risk_commits": 0,
+            "critical_risk_commits": 0,
+            "accidental_breaking_changes": 0,
+            "intentional_breaking_changes": 0,
             "breaking_changes_by_type": {},
+            "breaking_changes_by_severity": {},
+            "breaking_changes_by_intent": {},
+            "migration_complexity_breakdown": {},
             "risk_trend": [],
             "most_risky_files": {},
             "recent_high_risk_commits": [],
+            "advanced_insights": {
+                "most_dangerous_change_types": {},
+                "files_with_most_breaking_changes": {},
+                "average_confidence_score": 0.0,
+                "detection_method_effectiveness": {}
+            },
             "performance_stats": {
                 "new_commits_analyzed": len(new_analyses),
                 "cached_analyses_used": len(analyzed_commits) - len(new_analyses),
@@ -1649,8 +1691,12 @@ async def get_risk_dashboard(
             }
         }
         
-        # Process cached analyses for dashboard
+        # Process cached analyses for enhanced dashboard
+        total_confidence = 0
+        confidence_count = 0
+        
         for analysis in analyzed_commits.values():
+            # Basic risk categorization
             if analysis.overall_risk_score > 0.7:
                 risk_data["high_risk_commits"] += 1
                 risk_data["recent_high_risk_commits"].append({
@@ -1659,14 +1705,62 @@ async def get_risk_dashboard(
                     "breaking_changes_count": analysis.breaking_changes_count
                 })
             
-            # Count breaking change types from stored data
+            if analysis.overall_risk_score > 0.9:
+                risk_data["critical_risk_commits"] += 1
+            
+            # Enhanced breaking change analysis from stored data
             try:
                 breaking_changes = json.loads(analysis.breaking_changes)
                 for bc in breaking_changes:
+                    # Count by type
                     change_type = bc.get("change_type", "unknown")
                     risk_data["breaking_changes_by_type"][change_type] = \
                         risk_data["breaking_changes_by_type"].get(change_type, 0) + 1
-            except:
+                    
+                    # Count by severity
+                    severity = bc.get("severity", "unknown")
+                    risk_data["breaking_changes_by_severity"][severity] = \
+                        risk_data["breaking_changes_by_severity"].get(severity, 0) + 1
+                    
+                    # Count by intent
+                    intent = bc.get("intent", "unknown")
+                    risk_data["breaking_changes_by_intent"][intent] = \
+                        risk_data["breaking_changes_by_intent"].get(intent, 0) + 1
+                    
+                    if intent == "accidental":
+                        risk_data["accidental_breaking_changes"] += 1
+                    elif intent == "intentional":
+                        risk_data["intentional_breaking_changes"] += 1
+                    
+                    # Migration complexity
+                    complexity = bc.get("migration_complexity", "unknown")
+                    risk_data["migration_complexity_breakdown"][complexity] = \
+                        risk_data["migration_complexity_breakdown"].get(complexity, 0) + 1
+                    
+                    # Advanced insights
+                    if severity in ["critical", "high"]:
+                        risk_data["advanced_insights"]["most_dangerous_change_types"][change_type] = \
+                            risk_data["advanced_insights"]["most_dangerous_change_types"].get(change_type, 0) + 1
+                    
+                    # Track confidence scores
+                    confidence = bc.get("confidence_score", 0)
+                    if confidence > 0:
+                        total_confidence += confidence
+                        confidence_count += 1
+                    
+                    # Track detection methods
+                    detection_methods = bc.get("detection_methods", [])
+                    for method in detection_methods:
+                        risk_data["advanced_insights"]["detection_method_effectiveness"][method] = \
+                            risk_data["advanced_insights"]["detection_method_effectiveness"].get(method, 0) + 1
+                    
+                    # Track files with breaking changes
+                    file_path = bc.get("file_path", "unknown")
+                    risk_data["advanced_insights"]["files_with_most_breaking_changes"][file_path] = \
+                        risk_data["advanced_insights"]["files_with_most_breaking_changes"].get(file_path, 0) + 1
+                        
+            except Exception as e:
+                logger.debug(f"Error processing breaking changes for {analysis.commit_hash}: {e}")
                 pass
             
             # Track risky files
@@ -1682,8 +1776,13 @@ async def get_risk_dashboard(
             risk_data["risk_trend"].append({
                 "commit_hash": analysis.commit_hash[:8],
                 "timestamp": analysis.analyzed_at,
-                "risk_score": float(analysis.overall_risk_score)
+                "risk_score": float(analysis.overall_risk_score),
+                "breaking_changes": analysis.breaking_changes_count
             })
+        
+        # Calculate average confidence
+        if confidence_count > 0:
+            risk_data["advanced_insights"]["average_confidence_score"] = total_confidence / confidence_count
         
         # Sort and limit results
         risk_data["most_risky_files"] = dict(
@@ -1705,6 +1804,66 @@ async def get_risk_dashboard(
         # Calculate overall repository risk score
         if risk_data["total_commits_analyzed"] > 0:
             risk_data["overall_risk_score"] = float(risk_data["high_risk_commits"] / risk_data["total_commits_analyzed"])
+            
+            # Enhanced percentage breakdowns for breaking changes
+            total_breaking_changes = sum(risk_data["breaking_changes_by_severity"].values())
+            if total_breaking_changes > 0:
+                risk_data["breaking_changes_percentages"] = {
+                    "by_severity": {
+                        severity: {
+                            "count": count,
+                            "percentage": round((count / total_breaking_changes) * 100, 1)
+                        }
+                        for severity, count in risk_data["breaking_changes_by_severity"].items()
+                    },
+                    "by_intent": {
+                        intent: {
+                            "count": count,
+                            "percentage": round((count / total_breaking_changes) * 100, 1)
+                        }
+                        for intent, count in risk_data["breaking_changes_by_intent"].items()
+                    },
+                    "by_type": {
+                        change_type: {
+                            "count": count,
+                            "percentage": round((count / total_breaking_changes) * 100, 1)
+                        }
+                        for change_type, count in risk_data["breaking_changes_by_type"].items()
+                    },
+                    "by_migration_complexity": {
+                        complexity: {
+                            "count": count,
+                            "percentage": round((count / total_breaking_changes) * 100, 1)
+                        }
+                        for complexity, count in risk_data["migration_complexity_breakdown"].items()
+                    }
+                }
+            
+            # Commit risk percentages
+            risk_data["commit_risk_percentages"] = {
+                "high_risk": {
+                    "count": risk_data["high_risk_commits"],
+                    "percentage": round((risk_data["high_risk_commits"] / risk_data["total_commits_analyzed"]) * 100, 1)
+                },
+                "critical_risk": {
+                    "count": risk_data["critical_risk_commits"],
+                    "percentage": round((risk_data["critical_risk_commits"] / risk_data["total_commits_analyzed"]) * 100, 1)
+                },
+                "safe_commits": {
+                    "count": risk_data["total_commits_analyzed"] - risk_data["high_risk_commits"],
+                    "percentage": round(((risk_data["total_commits_analyzed"] - risk_data["high_risk_commits"]) / risk_data["total_commits_analyzed"]) * 100, 1)
+                }
+            }
+            
+            # Intent-based percentages for overall repository
+            total_intent_changes = risk_data["accidental_breaking_changes"] + risk_data["intentional_breaking_changes"]
+            if total_intent_changes > 0:
+                risk_data["intent_risk_percentages"] = {
+                    "accidental_percentage": round((risk_data["accidental_breaking_changes"] / total_intent_changes) * 100, 1),
+                    "intentional_percentage": round((risk_data["intentional_breaking_changes"] / total_intent_changes) * 100, 1),
+                    "accidental_risk_score": round((risk_data["accidental_breaking_changes"] / risk_data["total_commits_analyzed"]) * 100, 1),
+                    "intentional_risk_score": round((risk_data["intentional_breaking_changes"] / risk_data["total_commits_analyzed"]) * 100, 1)
+                }
         else:
             risk_data["overall_risk_score"] = 0.0
         
@@ -1735,18 +1894,47 @@ async def get_commit_analysis(
     commit_hash: str,
     current_user: str = Depends(require_repository_access)
 ):
-    """Get detailed analysis of a specific commit with RAG context"""
+    """Get detailed analysis of a specific commit with advanced breaking change detection and RAG context"""
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found.")
         
         git_analyzer = active_repos[repo_id]
         
-        # Get commit analysis
+        # Get advanced breaking change analysis with AI for individual commit analysis
+        logger.info(f"🔍 Advanced breaking change analysis for commit {commit_hash[:8]}")
+        breaking_changes = breaking_change_detector.analyze_commit_for_breaking_changes(commit_hash, git_analyzer, enable_ai_analysis=True)
+        
+        # Get basic commit analysis for backward compatibility
         commit_analysis = breaking_change_detector.analyze_commit(git_analyzer, commit_hash)
         
-        # Get RAG context for this commit
+        # Enhanced risk calculation using advanced detector
+        enhanced_risk_score = 0.0
+        if breaking_changes:
+            severity_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2, "enhancement": 0.1}
+            intent_weights = {"accidental": 1.5, "unclear": 1.2, "intentional": 1.0}
+            
+            total_weight = 0
+            for bc in breaking_changes:
+                severity_weight = severity_weights.get(bc.severity.value, 0.5)
+                intent_weight = intent_weights.get(bc.intent.value, 1.0)
+                migration_complexity_weight = {"very_complex": 1.5, "complex": 1.3, "moderate": 1.1, "easy": 0.9, "trivial": 0.7}.get(bc.migration_complexity, 1.0)
+                
+                change_risk = severity_weight * intent_weight * migration_complexity_weight * bc.confidence_score
+                total_weight += change_risk
+            
+            enhanced_risk_score = min(total_weight / len(breaking_changes), 1.0)
+        
+        # Use higher of the two risk calculations
+        final_risk_score = max(enhanced_risk_score, commit_analysis.overall_risk_score)
+        
+        # Get RAG context for this commit enhanced with breaking change information
         rag_query = f"analyze commit {commit_hash} changes risk breaking"
+        if breaking_changes:
+            critical_changes = [bc for bc in breaking_changes if bc.severity.value == "critical"]
+            accidental_changes = [bc for bc in breaking_changes if bc.intent.value == "accidental"]
+            rag_query += f" [CONTEXT: {len(breaking_changes)} breaking changes found, {len(critical_changes)} critical, {len(accidental_changes)} accidental]"
+        
         rag_result = rag_system.query(repo_id, rag_query, max_results=8)
         
         # Enhanced analysis with Claude if available
@@ -1758,7 +1946,18 @@ async def get_commit_analysis(
                     "message": commit_analysis.commit_message,
                     "files_changed": commit_analysis.files_changed,
                     "breaking_changes": [asdict(bc) for bc in commit_analysis.breaking_changes],
-                    "risk_score": commit_analysis.overall_risk_score
+                    "advanced_breaking_changes": [{
+                        "change_type": bc.change_type.value,
+                        "severity": bc.severity.value,
+                        "intent": bc.intent.value,
+                        "confidence_score": bc.confidence_score,
+                        "description": bc.description,
+                        "migration_complexity": bc.migration_complexity,
+                        "affected_users_estimate": bc.affected_users_estimate,
+                        "detection_methods": bc.detection_methods
+                    } for bc in breaking_changes],
+                    "risk_score": final_risk_score,
+                    "enhanced_risk_score": enhanced_risk_score
                 }
                 enhanced_analysis = claude_analyzer.analyze_commit_breaking_changes(
                     commit_data, rag_result.context_used
@@ -1766,8 +1965,68 @@ async def get_commit_analysis(
             except Exception as e:
                 logger.warning(f"Claude analysis failed: {str(e)}")
         
+        # Advanced breaking change insights
+        breaking_change_insights = {
+            "total_breaking_changes": len(breaking_changes),
+            "by_severity": {},
+            "by_intent": {},
+            "by_type": {},
+            "migration_complexity": {},
+            "high_confidence_changes": [],
+            "files_affected": set(),
+            "detection_methods_used": set()
+        }
+        
+        for bc in breaking_changes:
+            # Count by categories
+            breaking_change_insights["by_severity"][bc.severity.value] = \
+                breaking_change_insights["by_severity"].get(bc.severity.value, 0) + 1
+            breaking_change_insights["by_intent"][bc.intent.value] = \
+                breaking_change_insights["by_intent"].get(bc.intent.value, 0) + 1
+            breaking_change_insights["by_type"][bc.change_type.value] = \
+                breaking_change_insights["by_type"].get(bc.change_type.value, 0) + 1
+            breaking_change_insights["migration_complexity"][bc.migration_complexity] = \
+                breaking_change_insights["migration_complexity"].get(bc.migration_complexity, 0) + 1
+            
+            # High confidence changes
+            if bc.confidence_score > 0.8:
+                breaking_change_insights["high_confidence_changes"].append({
+                    "description": bc.description,
+                    "confidence": bc.confidence_score,
+                    "severity": bc.severity.value,
+                    "file": bc.file_path
+                })
+            
+            # Track affected files and detection methods
+            breaking_change_insights["files_affected"].add(bc.file_path)
+            breaking_change_insights["detection_methods_used"].update(bc.detection_methods)
+        
+        # Convert sets to lists for JSON serialization
+        breaking_change_insights["files_affected"] = list(breaking_change_insights["files_affected"])
+        breaking_change_insights["detection_methods_used"] = list(breaking_change_insights["detection_methods_used"])
+        
         result = {
             "commit_analysis": asdict(commit_analysis),
+            "advanced_breaking_changes": [{
+                "id": bc.id,
+                "change_type": bc.change_type.value,
+                "severity": bc.severity.value,
+                "intent": bc.intent.value,
+                "confidence_score": bc.confidence_score,
+                "affected_component": bc.affected_component,
+                "file_path": bc.file_path,
+                "line_number": bc.line_number,
+                "old_signature": bc.old_signature,
+                "new_signature": bc.new_signature,
+                "description": bc.description,
+                "technical_details": bc.technical_details,
+                "migration_complexity": bc.migration_complexity,
+                "affected_users_estimate": bc.affected_users_estimate,
+                "suggested_migration": bc.suggested_migration,
+                "detection_methods": bc.detection_methods,
+                "expert_recommendations": bc.expert_recommendations
+            } for bc in breaking_changes],
+            "breaking_change_insights": breaking_change_insights,
             "rag_insights": {
                 "response": rag_result.response,
                 "confidence": rag_result.confidence,
@@ -1776,12 +2035,65 @@ async def get_commit_analysis(
             },
             "enhanced_analysis": enhanced_analysis,
             "risk_assessment": {
-                "is_high_risk": commit_analysis.overall_risk_score > 0.7,
-                "risk_level": "High" if commit_analysis.overall_risk_score > 0.7 
-                           else "Medium" if commit_analysis.overall_risk_score > 0.3 
+                "original_risk_score": commit_analysis.overall_risk_score,
+                "enhanced_risk_score": enhanced_risk_score,
+                "final_risk_score": final_risk_score,
+                "is_high_risk": final_risk_score > 0.7,
+                "is_critical_risk": final_risk_score > 0.9,
+                "risk_level": "Critical" if final_risk_score > 0.9 
+                           else "High" if final_risk_score > 0.7 
+                           else "Medium" if final_risk_score > 0.3 
                            else "Low",
-                "total_breaking_changes": len(commit_analysis.breaking_changes),
-                "files_at_risk": len(commit_analysis.files_changed)
+                "total_breaking_changes": len(breaking_changes),
+                "critical_breaking_changes": len([bc for bc in breaking_changes if bc.severity.value == "critical"]),
+                "accidental_breaking_changes": len([bc for bc in breaking_changes if bc.intent.value == "accidental"]),
+                "files_at_risk": len(commit_analysis.files_changed),
+                
+                # Enhanced percentage analysis
+                "risk_percentage": round(final_risk_score * 100, 1),
+                "breaking_change_percentages": {
+                    "by_severity": {
+                        severity: {
+                            "count": len([bc for bc in breaking_changes if bc.severity.value == severity]),
+                            "percentage": round((len([bc for bc in breaking_changes if bc.severity.value == severity]) / max(len(breaking_changes), 1)) * 100, 1)
+                        }
+                        for severity in ["critical", "high", "medium", "low", "enhancement"]
+                    } if breaking_changes else {},
+                    "by_intent": {
+                        intent: {
+                            "count": len([bc for bc in breaking_changes if bc.intent.value == intent]),
+                            "percentage": round((len([bc for bc in breaking_changes if bc.intent.value == intent]) / max(len(breaking_changes), 1)) * 100, 1)
+                        }
+                        for intent in ["accidental", "intentional", "unclear"]
+                    } if breaking_changes else {},
+                    "by_migration_complexity": {
+                        complexity: {
+                            "count": len([bc for bc in breaking_changes if bc.migration_complexity == complexity]),
+                            "percentage": round((len([bc for bc in breaking_changes if bc.migration_complexity == complexity]) / max(len(breaking_changes), 1)) * 100, 1)
+                        }
+                        for complexity in ["very_complex", "complex", "moderate", "easy", "trivial"]
+                    } if breaking_changes else {}
+                },
+                "confidence_metrics": {
+                    "average_confidence": round(sum(bc.confidence_score for bc in breaking_changes) / max(len(breaking_changes), 1), 2) if breaking_changes else 0.0,
+                    "high_confidence_changes": len([bc for bc in breaking_changes if bc.confidence_score > 0.8]),
+                    "low_confidence_changes": len([bc for bc in breaking_changes if bc.confidence_score < 0.5]),
+                    "confidence_distribution": {
+                        "high_confidence_percentage": round((len([bc for bc in breaking_changes if bc.confidence_score > 0.8]) / max(len(breaking_changes), 1)) * 100, 1),
+                        "medium_confidence_percentage": round((len([bc for bc in breaking_changes if 0.5 <= bc.confidence_score <= 0.8]) / max(len(breaking_changes), 1)) * 100, 1),
+                        "low_confidence_percentage": round((len([bc for bc in breaking_changes if bc.confidence_score < 0.5]) / max(len(breaking_changes), 1)) * 100, 1)
+                    } if breaking_changes else {}
+                },
+                "impact_analysis": {
+                    "files_affected_percentage": round((len(commit_analysis.files_changed) / max(len(git_analyzer.repo.head.commit.tree.traverse()), 1)) * 100, 2),
+                    "estimated_affected_users": sum(getattr(bc, 'affected_users_estimate', 0) for bc in breaking_changes),
+                    "risk_factors": [
+                        f"{round(final_risk_score * 100, 1)}% overall risk score",
+                        f"{len([bc for bc in breaking_changes if bc.severity.value in ['critical', 'high']])} high/critical severity changes",
+                        f"{len([bc for bc in breaking_changes if bc.intent.value == 'accidental'])} accidental breaking changes",
+                        f"{len([bc for bc in breaking_changes if bc.migration_complexity in ['very_complex', 'complex']])} complex migrations required"
+                    ] if breaking_changes else ["No breaking changes detected"]
+                }
             }
         }
         
@@ -1790,13 +2102,68 @@ async def get_commit_analysis(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Commit analysis failed: {str(e)}")
 
+@app.get("/api/repository/{repo_id}/risk-summary")
+async def get_repository_risk_summary(
+    repo_id: str,
+    current_user: str = Depends(require_repository_access)
+):
+    """Get a quick risk percentage summary for the repository"""
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found.")
+        
+        # Get cached dashboard or force a minimal calculation
+        cached_dashboard = db_manager.get_dashboard_cache(repo_id)
+        if cached_dashboard:
+            dashboard_data = json.loads(cached_dashboard.dashboard_data)
+            
+            # Extract key percentages
+            risk_summary = {
+                "overall_risk_percentage": round(dashboard_data.get("overall_risk_score", 0) * 100, 1),
+                "high_risk_commits_percentage": dashboard_data.get("commit_risk_percentages", {}).get("high_risk", {}).get("percentage", 0),
+                "critical_risk_commits_percentage": dashboard_data.get("commit_risk_percentages", {}).get("critical_risk", {}).get("percentage", 0),
+                "safe_commits_percentage": dashboard_data.get("commit_risk_percentages", {}).get("safe_commits", {}).get("percentage", 0),
+                "accidental_breaking_changes_percentage": dashboard_data.get("intent_risk_percentages", {}).get("accidental_percentage", 0),
+                "breaking_changes_by_severity": dashboard_data.get("breaking_changes_percentages", {}).get("by_severity", {}),
+                "total_commits_analyzed": dashboard_data.get("total_commits_analyzed", 0),
+                "cache_status": "cached",
+                "last_updated": cached_dashboard.last_updated
+            }
+        else:
+            # Quick calculation without full dashboard generation
+            git_analyzer = active_repos[repo_id]
+            recent_commits = list(git_analyzer.repo.iter_commits(max_count=50))
+            analyzed_commits = db_manager.get_repository_commit_analyses(repo_id, limit=100)
+            
+            high_risk_count = len([a for a in analyzed_commits if a.overall_risk_score > 0.7])
+            critical_risk_count = len([a for a in analyzed_commits if a.overall_risk_score > 0.9])
+            total_analyzed = len(analyzed_commits)
+            
+            risk_summary = {
+                "overall_risk_percentage": round((high_risk_count / max(total_analyzed, 1)) * 100, 1),
+                "high_risk_commits_percentage": round((high_risk_count / max(total_analyzed, 1)) * 100, 1),
+                "critical_risk_commits_percentage": round((critical_risk_count / max(total_analyzed, 1)) * 100, 1),
+                "safe_commits_percentage": round(((total_analyzed - high_risk_count) / max(total_analyzed, 1)) * 100, 1),
+                "total_commits_analyzed": total_analyzed,
+                "total_commits_in_repo": len(recent_commits),
+                "cache_status": "live_calculation",
+                "last_updated": datetime.now().isoformat(),
+                "recommendation": "Run full risk dashboard analysis for detailed percentages" if total_analyzed < 10 else None
+            }
+        
+        return risk_summary
+        
+    except Exception as e:
+        logger.error(f"Failed to get risk summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get risk summary: {str(e)}")
+
 @app.get("/api/repository/{repo_id}/file/{file_path:path}/insights")
 async def get_file_insights(
     repo_id: str, 
     file_path: str,
     current_user: str = Depends(require_repository_access)
 ):
-    """Get comprehensive insights about a specific file"""
+    """Get comprehensive insights about a specific file with advanced breaking change analysis"""
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found.")
@@ -1807,31 +2174,97 @@ async def get_file_insights(
         repo = git_analyzer.repo
         file_commits = list(repo.iter_commits(paths=file_path, max_count=50))
         
-        # RAG query for file-specific insights
-        rag_query = f"file {file_path} changes history modifications risk"
-        rag_result = rag_system.query(repo_id, rag_query, max_results=10)
-        
-        # Analyze file risk patterns
+        # Analyze file risk patterns with advanced breaking change detector
         risk_history = []
+        advanced_breaking_changes_history = []
         total_risk = 0.0
+        enhanced_total_risk = 0.0
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "enhancement": 0}
+        intent_counts = {"accidental": 0, "intentional": 0, "unclear": 0}
+        
         for commit in file_commits[:20]:
             try:
+                # Basic analysis
                 analysis = breaking_change_detector.analyze_commit(git_analyzer, commit.hexsha)
+                
+                # Advanced breaking change analysis
+                advanced_breaking_changes = []
+                enhanced_risk_score = 0.0
+                try:
+                    all_advanced_changes = breaking_change_detector.analyze_commit_for_breaking_changes(commit.hexsha, git_analyzer)
+                    # Filter for changes affecting this specific file
+                    advanced_breaking_changes = [bc for bc in all_advanced_changes if bc.file_path == file_path]
+                    
+                    if advanced_breaking_changes:
+                        severity_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2, "enhancement": 0.1}
+                        intent_weights = {"accidental": 1.5, "unclear": 1.2, "intentional": 1.0}
+                        
+                        total_weight = 0
+                        for bc in advanced_breaking_changes:
+                            severity_weight = severity_weights.get(bc.severity.value, 0.5)
+                            intent_weight = intent_weights.get(bc.intent.value, 1.0)
+                            migration_complexity_weight = {"very_complex": 1.5, "complex": 1.3, "moderate": 1.1, "easy": 0.9, "trivial": 0.7}.get(bc.migration_complexity, 1.0)
+                            
+                            change_risk = severity_weight * intent_weight * migration_complexity_weight * bc.confidence_score
+                            total_weight += change_risk
+                            
+                            # Count by categories
+                            severity_counts[bc.severity.value] += 1
+                            intent_counts[bc.intent.value] += 1
+                        
+                        enhanced_risk_score = min(total_weight / len(advanced_breaking_changes), 1.0)
+                        
+                        # Store detailed breaking change info
+                        for bc in advanced_breaking_changes:
+                            advanced_breaking_changes_history.append({
+                                "commit_hash": commit.hexsha[:8],
+                                "timestamp": commit.committed_datetime.isoformat(),
+                                "change_type": bc.change_type.value,
+                                "severity": bc.severity.value,
+                                "intent": bc.intent.value,
+                                "confidence": bc.confidence_score,
+                                "description": bc.description,
+                                "migration_complexity": bc.migration_complexity,
+                                "old_signature": bc.old_signature,
+                                "new_signature": bc.new_signature
+                            })
+                            
+                except Exception as e:
+                    logger.debug(f"Advanced analysis failed for commit {commit.hexsha}: {e}")
+                
                 if file_path in analysis.files_changed:
+                    final_risk_score = max(enhanced_risk_score, analysis.overall_risk_score)
+                    
                     risk_history.append({
                         "commit_hash": commit.hexsha[:8],
                         "timestamp": commit.committed_datetime.isoformat(),
                         "message": commit.message[:100],
                         "risk_score": float(analysis.overall_risk_score),
+                        "enhanced_risk_score": float(enhanced_risk_score),
+                        "final_risk_score": float(final_risk_score),
                         "breaking_changes": len([bc for bc in analysis.breaking_changes 
-                                               if file_path in bc.file_path])
+                                               if file_path in bc.file_path]),
+                        "advanced_breaking_changes": len(advanced_breaking_changes)
                     })
                     total_risk += analysis.overall_risk_score
+                    enhanced_total_risk += final_risk_score
+                    
             except Exception as e:
                 continue
         
-        # Calculate file risk metrics
+        # Enhanced RAG query with breaking change context
+        breaking_change_context = ""
+        if advanced_breaking_changes_history:
+            critical_count = severity_counts["critical"]
+            accidental_count = intent_counts["accidental"]
+            breaking_change_context = f" [CONTEXT: {len(advanced_breaking_changes_history)} breaking changes in file history, {critical_count} critical, {accidental_count} accidental]"
+        
+        rag_query = f"file {file_path} changes history modifications risk{breaking_change_context}"
+        rag_result = rag_system.query(repo_id, rag_query, max_results=10)
+        
+        # Calculate enhanced file risk metrics
         avg_risk = total_risk / len(risk_history) if risk_history else 0.0
+        avg_enhanced_risk = enhanced_total_risk / len(risk_history) if risk_history else 0.0
         modification_frequency = len(file_commits)
         recent_activity = len([c for c in file_commits if (datetime.now() - c.committed_datetime.replace(tzinfo=None)).days <= 30])
         
@@ -1855,10 +2288,26 @@ async def get_file_insights(
             },
             "risk_metrics": {
                 "average_risk_score": float(avg_risk),
-                "risk_level": "High" if avg_risk > 0.7 else "Medium" if avg_risk > 0.3 else "Low",
+                "average_enhanced_risk_score": float(avg_enhanced_risk),
+                "risk_level": "Critical" if avg_enhanced_risk > 0.9 
+                           else "High" if avg_enhanced_risk > 0.7 
+                           else "Medium" if avg_enhanced_risk > 0.3 
+                           else "Low",
                 "modification_frequency": modification_frequency,
                 "recent_activity_score": recent_activity,
-                "is_high_activity": modification_frequency > 10
+                "is_high_activity": modification_frequency > 10,
+                "breaking_changes_count": len(advanced_breaking_changes_history)
+            },
+            "breaking_change_analysis": {
+                "total_breaking_changes": len(advanced_breaking_changes_history),
+                "by_severity": severity_counts,
+                "by_intent": intent_counts,
+                "recent_breaking_changes": advanced_breaking_changes_history[:10],  # Most recent 10
+                "most_severe_changes": sorted(
+                    advanced_breaking_changes_history,
+                    key=lambda x: {"critical": 4, "high": 3, "medium": 2, "low": 1, "enhancement": 0}.get(x["severity"], 0),
+                    reverse=True
+                )[:5]
             },
             "history": {
                 "total_commits": len(file_commits),
@@ -1885,22 +2334,95 @@ async def enhanced_rag_query(
     request: QueryRequest,
     current_user: str = Depends(require_repository_access)
 ):
-    """Enhanced RAG query with Claude integration and advanced context analysis"""
+    """Enhanced RAG query with Claude integration and advanced breaking change context"""
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found.")
         
+        git_analyzer = active_repos[repo_id]
+        
+        # Check if query is related to breaking changes or risk
+        breaking_change_keywords = ['breaking', 'break', 'risk', 'danger', 'critical', 'severe', 'migration', 'compatibility', 'change']
+        is_breaking_change_query = any(keyword in request.query.lower() for keyword in breaking_change_keywords)
+        
         # Get comprehensive RAG response
         rag_result = rag_system.query(repo_id, request.query, max_results=10)
+        
+        # If query relates to breaking changes, enhance with advanced analysis
+        breaking_change_context = None
+        if is_breaking_change_query:
+            try:
+                # Get recent commits for breaking change analysis
+                repo = git_analyzer.repo
+                recent_commits = list(repo.iter_commits(max_count=20))
+                
+                # Analyze recent commits for breaking changes
+                breaking_changes_found = []
+                for commit in recent_commits[:10]:  # Limit to prevent timeout
+                    try:
+                        commit_breaking_changes = breaking_change_detector.analyze_commit_for_breaking_changes(commit.hexsha, git_analyzer)
+                        if commit_breaking_changes:
+                            breaking_changes_found.extend([{
+                                "commit_hash": commit.hexsha[:8],
+                                "change_type": bc.change_type.value,
+                                "severity": bc.severity.value,
+                                "intent": bc.intent.value,
+                                "confidence": bc.confidence_score,
+                                "description": bc.description,
+                                "file_path": bc.file_path,
+                                "migration_complexity": bc.migration_complexity,
+                                "affected_users": bc.affected_users_estimate
+                            } for bc in commit_breaking_changes])
+                    except Exception as e:
+                        logger.debug(f"Error analyzing commit {commit.hexsha} for breaking changes: {e}")
+                        continue
+                
+                # Summarize breaking change context
+                if breaking_changes_found:
+                    severity_counts = {}
+                    intent_counts = {}
+                    change_type_counts = {}
+                    
+                    for bc in breaking_changes_found:
+                        severity_counts[bc["severity"]] = severity_counts.get(bc["severity"], 0) + 1
+                        intent_counts[bc["intent"]] = intent_counts.get(bc["intent"], 0) + 1
+                        change_type_counts[bc["change_type"]] = change_type_counts.get(bc["change_type"], 0) + 1
+                    
+                    breaking_change_context = {
+                        "recent_breaking_changes": breaking_changes_found[:15],  # Limit for response size
+                        "summary": {
+                            "total_found": len(breaking_changes_found),
+                            "by_severity": severity_counts,
+                            "by_intent": intent_counts,
+                            "by_type": change_type_counts,
+                            "critical_count": severity_counts.get("critical", 0),
+                            "accidental_count": intent_counts.get("accidental", 0)
+                        }
+                    }
+                    
+                    # Enhance the RAG query with breaking change context
+                    enhanced_query = f"{request.query} [CONTEXT: Found {len(breaking_changes_found)} recent breaking changes including {severity_counts.get('critical', 0)} critical and {intent_counts.get('accidental', 0)} accidental changes]"
+                    rag_result = rag_system.query(repo_id, enhanced_query, max_results=12)
+                    
+            except Exception as e:
+                logger.warning(f"Error enhancing query with breaking change context: {e}")
         
         # Enhanced response with Claude if available
         enhanced_response = None
         if claude_analyzer.available and rag_result.confidence > 0.3:
             try:
+                # Include breaking change context in Claude analysis
+                claude_context = rag_result.sources[:8]
+                if breaking_change_context:
+                    claude_context.append({
+                        "type": "breaking_change_analysis",
+                        "content": f"Advanced breaking change analysis found {breaking_change_context['summary']['total_found']} changes with {breaking_change_context['summary']['critical_count']} critical issues"
+                    })
+                
                 enhanced_response = claude_analyzer.enhance_rag_response(
                     request.query, 
                     rag_result.response, 
-                    rag_result.sources[:8]  # Limit context for Claude
+                    claude_context
                 )
             except Exception as e:
                 logger.warning(f"Claude enhancement failed: {str(e)}")
@@ -1922,6 +2444,7 @@ async def enhanced_rag_query(
                 "suggestions": rag_result.suggestions
             },
             "enhanced_response": enhanced_response,
+            "breaking_change_context": breaking_change_context,  # New field with advanced analysis
             "related_content": {
                 "commits": related_commits,
                 "files": related_files
@@ -1936,6 +2459,7 @@ async def enhanced_rag_query(
                 "query_processed_at": datetime.now().isoformat(),
                 "context_sources": len(rag_result.sources),
                 "claude_enhanced": enhanced_response is not None,
+                "breaking_change_enhanced": breaking_change_context is not None,
                 "confidence_level": "High" if rag_result.confidence > 0.8 
                                   else "Medium" if rag_result.confidence > 0.5 
                                   else "Low"
@@ -1968,24 +2492,60 @@ async def get_semantic_drift_analysis(
             if commit.committed_datetime.replace(tzinfo=None) >= cutoff_date
         ]
         
-        # Analyze semantic patterns
+        # Analyze semantic patterns with enhanced breaking change analysis
         semantic_patterns = {
             "commit_message_themes": {},
             "file_change_patterns": {},
             "risk_evolution": [],
             "breaking_change_trends": {},
-            "developer_impact": {}
+            "advanced_breaking_change_trends": {},
+            "developer_impact": {},
+            "severity_trends": {},
+            "intent_patterns": {},
+            "migration_complexity_trends": {}
         }
         
         for commit in recent_commits:
             try:
+                # Get basic analysis
                 analysis = breaking_change_detector.analyze_commit(git_analyzer, commit.hexsha)
                 
-                # Track risk evolution
+                # Get advanced breaking change analysis
+                advanced_breaking_changes = []
+                try:
+                    advanced_breaking_changes = breaking_change_detector.analyze_commit_for_breaking_changes(commit.hexsha, git_analyzer)
+                except Exception as e:
+                    logger.debug(f"Advanced analysis failed for commit {commit.hexsha}: {e}")
+                
+                # Calculate enhanced risk score
+                enhanced_risk_score = 0.0
+                if advanced_breaking_changes:
+                    severity_weights = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2, "enhancement": 0.1}
+                    intent_weights = {"accidental": 1.5, "unclear": 1.2, "intentional": 1.0}
+                    
+                    total_weight = 0
+                    for bc in advanced_breaking_changes:
+                        severity_weight = severity_weights.get(bc.severity.value, 0.5)
+                        intent_weight = intent_weights.get(bc.intent.value, 1.0)
+                        migration_complexity_weight = {"very_complex": 1.5, "complex": 1.3, "moderate": 1.1, "easy": 0.9, "trivial": 0.7}.get(bc.migration_complexity, 1.0)
+                        
+                        change_risk = severity_weight * intent_weight * migration_complexity_weight * bc.confidence_score
+                        total_weight += change_risk
+                    
+                    enhanced_risk_score = min(total_weight / len(advanced_breaking_changes), 1.0)
+                
+                # Use higher of the two risk calculations
+                final_risk_score = max(enhanced_risk_score, analysis.overall_risk_score)
+                
+                # Track enhanced risk evolution
                 semantic_patterns["risk_evolution"].append({
                     "date": commit.committed_datetime.isoformat(),
-                    "risk_score": float(analysis.overall_risk_score),
-                    "breaking_changes": len(analysis.breaking_changes)
+                    "timestamp": commit.committed_datetime.isoformat(),
+                    "risk_score": float(final_risk_score),
+                    "original_risk_score": float(analysis.overall_risk_score),
+                    "enhanced_risk_score": float(enhanced_risk_score),
+                    "breaking_changes": len(analysis.breaking_changes),
+                    "advanced_breaking_changes": len(advanced_breaking_changes)
                 })
                 
                 # Analyze commit message themes
@@ -2001,24 +2561,54 @@ async def get_semantic_drift_analysis(
                     semantic_patterns["file_change_patterns"][file_ext] = \
                         semantic_patterns["file_change_patterns"].get(file_ext, 0) + 1
                 
-                # Track breaking change trends
+                # Track basic breaking change trends
                 for bc in analysis.breaking_changes:
                     change_type = bc.change_type.value
                     semantic_patterns["breaking_change_trends"][change_type] = \
                         semantic_patterns["breaking_change_trends"].get(change_type, 0) + 1
                 
-                # Developer impact analysis
+                # Track advanced breaking change trends
+                for bc in advanced_breaking_changes:
+                    # By change type
+                    change_type = bc.change_type.value
+                    semantic_patterns["advanced_breaking_change_trends"][change_type] = \
+                        semantic_patterns["advanced_breaking_change_trends"].get(change_type, 0) + 1
+                    
+                    # By severity
+                    severity = bc.severity.value
+                    semantic_patterns["severity_trends"][severity] = \
+                        semantic_patterns["severity_trends"].get(severity, 0) + 1
+                    
+                    # By intent
+                    intent = bc.intent.value
+                    semantic_patterns["intent_patterns"][intent] = \
+                        semantic_patterns["intent_patterns"].get(intent, 0) + 1
+                    
+                    # By migration complexity
+                    complexity = bc.migration_complexity
+                    semantic_patterns["migration_complexity_trends"][complexity] = \
+                        semantic_patterns["migration_complexity_trends"].get(complexity, 0) + 1
+                
+                # Enhanced developer impact analysis
                 author = commit.author.name
                 if author not in semantic_patterns["developer_impact"]:
                     semantic_patterns["developer_impact"][author] = {
                         "commits": 0,
                         "total_risk": 0.0,
-                        "breaking_changes": 0
+                        "enhanced_risk": 0.0,
+                        "breaking_changes": 0,
+                        "advanced_breaking_changes": 0,
+                        "critical_changes": 0,
+                        "accidental_changes": 0
                     }
                 
                 semantic_patterns["developer_impact"][author]["commits"] += 1
                 semantic_patterns["developer_impact"][author]["total_risk"] += analysis.overall_risk_score
+                semantic_patterns["developer_impact"][author]["enhanced_risk"] += final_risk_score
                 semantic_patterns["developer_impact"][author]["breaking_changes"] += len(analysis.breaking_changes)
+                semantic_patterns["developer_impact"][author]["advanced_breaking_changes"] += len(advanced_breaking_changes)
+                semantic_patterns["developer_impact"][author]["critical_changes"] += len([bc for bc in advanced_breaking_changes if bc.severity.value == "critical"])
+                semantic_patterns["developer_impact"][author]["accidental_changes"] += len([bc for bc in advanced_breaking_changes if bc.intent.value == "accidental"])
                 
             except Exception as e:
                 continue
@@ -2030,20 +2620,30 @@ async def get_semantic_drift_analysis(
         top_file_patterns = sorted(semantic_patterns["file_change_patterns"].items(), 
                                   key=lambda x: x[1], reverse=True)[:10]
         
-        # Calculate developer risk scores
+        # Calculate enhanced developer risk scores
         for author, stats in semantic_patterns["developer_impact"].items():
             if stats["commits"] > 0:
                 stats["avg_risk"] = float(stats["total_risk"] / stats["commits"])
+                stats["avg_enhanced_risk"] = float(stats["enhanced_risk"] / stats["commits"])
+                stats["critical_change_rate"] = float(stats["critical_changes"] / stats["commits"])
+                stats["accidental_change_rate"] = float(stats["accidental_changes"] / stats["commits"])
             else:
                 stats["avg_risk"] = 0.0
+                stats["avg_enhanced_risk"] = 0.0
+                stats["critical_change_rate"] = 0.0
+                stats["accidental_change_rate"] = 0.0
         
         top_risk_developers = sorted(
             [(author, stats) for author, stats in semantic_patterns["developer_impact"].items()],
-            key=lambda x: x[1]["avg_risk"], reverse=True
+            key=lambda x: x[1]["avg_enhanced_risk"], reverse=True  # Use enhanced risk for sorting
         )[:5]
         
-        # Enhanced RAG query about drift patterns
-        drift_query = f"semantic drift patterns changes {days} days breaking changes trends"
+        # Enhanced RAG query about drift patterns with advanced context
+        total_advanced_breaking_changes = sum(r["advanced_breaking_changes"] for r in semantic_patterns["risk_evolution"])
+        critical_severity_count = semantic_patterns["severity_trends"].get("critical", 0)
+        accidental_count = semantic_patterns["intent_patterns"].get("accidental", 0)
+        
+        drift_query = f"semantic drift patterns changes {days} days breaking changes trends [CONTEXT: {total_advanced_breaking_changes} advanced breaking changes detected, {critical_severity_count} critical, {accidental_count} accidental]"
         rag_result = rag_system.query(repo_id, drift_query, max_results=8)
         
         result = {
@@ -2057,12 +2657,18 @@ async def get_semantic_drift_analysis(
                 "top_commit_themes": top_themes,
                 "file_change_patterns": top_file_patterns,
                 "breaking_change_trends": semantic_patterns["breaking_change_trends"],
+                "advanced_breaking_change_trends": semantic_patterns["advanced_breaking_change_trends"],
+                "severity_trends": semantic_patterns["severity_trends"],
+                "intent_patterns": semantic_patterns["intent_patterns"],
+                "migration_complexity_trends": semantic_patterns["migration_complexity_trends"],
                 "risk_trend_summary": {
                     "avg_risk": float(np.mean([r["risk_score"] for r in semantic_patterns["risk_evolution"]])) if semantic_patterns["risk_evolution"] else 0,
+                    "avg_enhanced_risk": float(np.mean([r["enhanced_risk_score"] for r in semantic_patterns["risk_evolution"]])) if semantic_patterns["risk_evolution"] else 0,
                     "max_risk": float(max([r["risk_score"] for r in semantic_patterns["risk_evolution"]])) if semantic_patterns["risk_evolution"] else 0,
-                    "total_breaking_changes": sum(r["breaking_changes"] for r in semantic_patterns["risk_evolution"])
-               
-
+                    "total_breaking_changes": sum(r["breaking_changes"] for r in semantic_patterns["risk_evolution"]),
+                    "total_advanced_breaking_changes": total_advanced_breaking_changes,
+                    "critical_changes": critical_severity_count,
+                    "accidental_changes": accidental_count
                 }
             },
             "developer_impact": {
@@ -2070,8 +2676,14 @@ async def get_semantic_drift_analysis(
                     {
                         "author": author,
                         "avg_risk_score": stats["avg_risk"],
+                        "avg_enhanced_risk_score": stats["avg_enhanced_risk"],
                         "total_commits": stats["commits"],
-                        "breaking_changes": stats["breaking_changes"]
+                        "breaking_changes": stats["breaking_changes"],
+                        "advanced_breaking_changes": stats["advanced_breaking_changes"],
+                        "critical_changes": stats["critical_changes"],
+                        "accidental_changes": stats["accidental_changes"],
+                        "critical_change_rate": stats["critical_change_rate"],
+                        "accidental_change_rate": stats["accidental_change_rate"]
                     }
                     for author, stats in top_risk_developers
                 ]
@@ -2452,46 +3064,128 @@ async def get_commit_files(
     repo_id: str,
     commit_hash: str,
     include_diff_stats: bool = Query(False, description="Include diff statistics for each file"),
+    show_all_files: bool = Query(True, description="Show all files in commit, not just changed files"),
     current_user: str = Depends(require_repository_access)
 ):
-    """Get list of files changed in a specific commit"""
+    """Get list of all files in a specific commit or just the files that were changed"""
     try:
         if repo_id not in active_repos:
             raise HTTPException(status_code=404, detail="Repository not found")
         
         git_analyzer = active_repos[repo_id]
-        
-        # Use caching function to get commit files data
-        cached_commit = get_or_cache_commit_files(repo_id, commit_hash, git_analyzer, include_diff_stats)
-        if not cached_commit:
-            raise HTTPException(status_code=404, detail="Commit not found or error processing commit")
-        
-        # Parse cached data
-        files_changed = json.loads(cached_commit.files_data)
-        summary_stats = json.loads(cached_commit.summary_stats)
+        repo = git_analyzer.repo
         
         # Get commit info
-        repo = git_analyzer.repo
         try:
             commit = repo.commit(commit_hash)
         except:
             raise HTTPException(status_code=404, detail="Commit not found")
         
-        return {
-            "repo_id": repo_id,
-            "commit_hash": commit_hash,
-            "commit_info": {
-                "message": commit.message.strip(),
-                "author": commit.author.name,
-                "email": commit.author.email,
-                "date": commit.committed_datetime.isoformat(),
-                "hash": commit.hexsha
-            },
-            "files_changed": files_changed,
-            "summary": summary_stats,
-            "cached_at": cached_commit.cached_at,
-            "from_cache": True
-        }
+        if show_all_files:
+            # Get all files in the commit tree
+            all_files = []
+            for item in commit.tree.traverse():
+                if item.type == 'blob':  # Only include files, not directories
+                    file_info = {
+                        "file_path": item.path,
+                        "change_type": "existing",
+                        "size": item.size,
+                        "language": detect_file_language(item.path),
+                        "mode": oct(item.mode)
+                    }
+                    
+                    # If diff stats are requested, calculate them for changed files
+                    if include_diff_stats and commit.parents:
+                        try:
+                            parent_commit = commit.parents[0]
+                            diffs = parent_commit.diff(commit, paths=[item.path])
+                            if diffs:
+                                diff_item = diffs[0]
+                                change_type_map = {'A': 'added', 'D': 'deleted', 'M': 'modified', 'R': 'renamed', 'C': 'copied'}
+                                file_info["change_type"] = change_type_map.get(diff_item.change_type, 'existing')
+                                
+                                if diff_item.diff:
+                                    diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                                    insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                                    deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                                    
+                                    file_info["diff_stats"] = {
+                                        "insertions": max(0, insertions),
+                                        "deletions": max(0, deletions),
+                                        "changes": max(0, insertions) + max(0, deletions)
+                                    }
+                        except Exception as e:
+                            logger.debug(f"Error getting diff stats for {item.path}: {e}")
+                    
+                    all_files.append(file_info)
+            
+            # Sort files by path for consistent ordering
+            all_files.sort(key=lambda f: f["file_path"])
+            
+            # Calculate summary stats
+            summary_stats = {
+                "total_files": len(all_files),
+                "files_by_language": {},
+                "total_size": sum(f["size"] for f in all_files)
+            }
+            
+            # Group by language
+            for file_info in all_files:
+                lang = file_info["language"]
+                if lang not in summary_stats["files_by_language"]:
+                    summary_stats["files_by_language"][lang] = 0
+                summary_stats["files_by_language"][lang] += 1
+            
+            if include_diff_stats:
+                summary_stats["files_by_change_type"] = {
+                    "added": len([f for f in all_files if f["change_type"] == "added"]),
+                    "modified": len([f for f in all_files if f["change_type"] == "modified"]),
+                    "deleted": len([f for f in all_files if f["change_type"] == "deleted"]),
+                    "renamed": len([f for f in all_files if f["change_type"] == "renamed"]),
+                    "existing": len([f for f in all_files if f["change_type"] == "existing"])
+                }
+            
+            return {
+                "repo_id": repo_id,
+                "commit_hash": commit_hash,
+                "commit_info": {
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "email": commit.author.email,
+                    "date": commit.committed_datetime.isoformat(),
+                    "hash": commit.hexsha
+                },
+                "files": all_files,
+                "summary": summary_stats,
+                "type": "all_files",
+                "from_cache": False
+            }
+        else:
+            # Use existing caching function to get only changed files
+            cached_commit = get_or_cache_commit_files(repo_id, commit_hash, git_analyzer, include_diff_stats)
+            if not cached_commit:
+                raise HTTPException(status_code=404, detail="Commit not found or error processing commit")
+            
+            # Parse cached data
+            files_changed = json.loads(cached_commit.files_data)
+            summary_stats = json.loads(cached_commit.summary_stats)
+            
+            return {
+                "repo_id": repo_id,
+                "commit_hash": commit_hash,
+                "commit_info": {
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "email": commit.author.email,
+                    "date": commit.committed_datetime.isoformat(),
+                    "hash": commit.hexsha
+                },
+                "files": files_changed,
+                "summary": summary_stats,
+                "type": "changed_files",
+                "cached_at": cached_commit.cached_at,
+                "from_cache": True
+            }
         
     except HTTPException:
         raise
@@ -2906,6 +3600,21 @@ def normalize_repository_url(repo_url: str) -> str:
     
     return url
 
+def serialize_breaking_change(bc) -> Dict[str, Any]:
+    """Serialize a BreakingChange object to a JSON-compatible dictionary"""
+    data = asdict(bc)
+    
+    # Convert enums to their string values
+    data['change_type'] = bc.change_type.value
+    data['severity'] = bc.severity.value  
+    data['intent'] = bc.intent.value
+    
+    # Convert datetime to ISO string
+    if hasattr(bc, 'detected_at') and bc.detected_at:
+        data['detected_at'] = bc.detected_at.isoformat()
+    
+    return data
+
 # ===== ADVANCED BREAKING CHANGE DETECTION ENDPOINT =====
 
 @app.post("/api/repository/{repo_id}/analyze-breaking-changes")
@@ -2931,8 +3640,8 @@ async def analyze_breaking_changes(
         git_analyzer = active_repos[repo_id]
         
         # Initialize the advanced breaking change detector
-        from src.advanced_breaking_change_detector import AdvancedBreakingChangeDetector
-        detector = AdvancedBreakingChangeDetector(git_analyzer, claude_analyzer)
+        from src.breaking_change_detector import BreakingChangeDetector
+        detector = BreakingChangeDetector(git_analyzer, claude_analyzer)
         
         # Parse request parameters
         commit_hashes = request.get('commit_hashes', [])
@@ -2967,7 +3676,6 @@ async def analyze_breaking_changes(
         
         else:
             # Analyze commits from the last N days
-            from datetime import datetime, timedelta
             cutoff_date = datetime.now() - timedelta(days=days_back)
             
             commits_to_analyze = []
@@ -3013,13 +3721,15 @@ async def analyze_breaking_changes(
                     # First commit - analyze all files as additions
                     diff_index = commit.diff(None)
                 
-                # Analyze the commit
-                analysis_result = detector.analyze_commit_for_breaking_changes(
-                    commit, 
-                    diff_index,
-                    include_context=include_context,
-                    ai_analysis=ai_analysis
-                )
+                # Analyze the commit using the enhanced breaking change detector
+                breaking_changes = detector.analyze_commit_for_breaking_changes(commit.hexsha, git_analyzer)
+                
+                # Create a compatible analysis result structure
+                analysis_result = type('AnalysisResult', (), {
+                    'breaking_changes': breaking_changes,
+                    'files_analyzed': len(set(bc.file_path for bc in breaking_changes if bc.file_path)),
+                    'analysis_duration': 0.0  # Not tracked by enhanced detector
+                })()
                 
                 if analysis_result.breaking_changes:
                     all_breaking_changes.extend(analysis_result.breaking_changes)
@@ -3033,7 +3743,7 @@ async def analyze_breaking_changes(
                     "breaking_changes_count": len(analysis_result.breaking_changes),
                     "files_analyzed": analysis_result.files_analyzed,
                     "analysis_duration": analysis_result.analysis_duration,
-                    "breaking_changes": [bc.to_dict() for bc in analysis_result.breaking_changes] if include_context else []
+                    "breaking_changes": [serialize_breaking_change(bc) for bc in analysis_result.breaking_changes] if include_context else []
                 })
                 
             except Exception as e:
@@ -3075,7 +3785,7 @@ async def analyze_breaking_changes(
             },
             "commits_analyzed": len(commits_to_analyze),
             "commits_details": commit_analyses,
-            "breaking_changes": [bc.to_dict() for bc in all_breaking_changes] if include_context else [],
+            "breaking_changes": [serialize_breaking_change(bc) for bc in all_breaking_changes] if include_context else [],
             "summary": {
                 "total_changes": len(all_breaking_changes),
                 "critical_changes": len(critical_changes),
@@ -3088,7 +3798,7 @@ async def analyze_breaking_changes(
             "analysis_timestamp": datetime.now().isoformat()
         }
         
-        return response
+        return convert_numpy_types(response)
         
     except HTTPException:
         raise

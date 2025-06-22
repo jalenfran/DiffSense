@@ -54,7 +54,7 @@ class ArchitectureAnalysis:
     data_flow: List[Dict[str, Any]]
     potential_bottlenecks: List[str]
 
-class SmartCodeAnalyzer:
+class CodeAnalyzer:
     """Intelligent code analyzer that understands structure and patterns"""
     
     def __init__(self):

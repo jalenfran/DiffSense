@@ -29,7 +29,7 @@ class Category(Enum):
     MAINTENANCE = "maintenance"
 
 @dataclass
-class SmartSuggestion:
+class Suggestion:
     """A smart, actionable suggestion with context"""
     title: str
     description: str
@@ -46,7 +46,7 @@ class SmartSuggestion:
     confidence: float
     reasoning: str
 
-class SmartSuggestionsEngine:
+class SuggestionsEngine:
     """Generates intelligent, contextual suggestions based on code analysis"""
     
     def __init__(self):
@@ -210,7 +210,7 @@ class SmartSuggestionsEngine:
         }
     
     def generate_smart_suggestions(self, query: str, domain: str, code_analysis: Dict[str, Any], 
-                                  file_analyses: List[Any], expert_analysis: Optional[Any] = None) -> List[SmartSuggestion]:
+                                  file_analyses: List[Any], expert_analysis: Optional[Any] = None) -> List[Suggestion]:
         """Generate smart, contextual suggestions based on analysis"""
         
         suggestions = []
@@ -242,7 +242,7 @@ class SmartSuggestionsEngine:
         return final_suggestions[:8]  # Return top 8 suggestions
     
     def _generate_pattern_suggestions(self, domain: str, code_analysis: Dict[str, Any], 
-                                    file_analyses: List[Any]) -> List[SmartSuggestion]:
+                                    file_analyses: List[Any]) -> List[Suggestion]:
         """Generate suggestions based on detected patterns"""
         suggestions = []
         
@@ -293,13 +293,13 @@ class SmartSuggestionsEngine:
         
         return suggestions
     
-    def _create_security_suggestion(self, issue: str, affected_files: List[str]) -> Optional[SmartSuggestion]:
+    def _create_security_suggestion(self, issue: str, affected_files: List[str]) -> Optional[Suggestion]:
         """Create security-specific suggestion"""
         
         if 'password' in issue.lower() or 'secret' in issue.lower() or 'api_key' in issue.lower():
             template = self.suggestion_patterns['security']['hardcoded_secrets']
             
-            return SmartSuggestion(
+            return Suggestion(
                 title=template['title'],
                 description=f"{template['description']}: {issue}",
                 priority=template['priority'],
@@ -327,7 +327,7 @@ class SmartSuggestionsEngine:
         elif 'sql' in issue.lower() and 'injection' in issue.lower():
             template = self.suggestion_patterns['security']['sql_injection']
             
-            return SmartSuggestion(
+            return Suggestion(
                 title=template['title'],
                 description=f"{template['description']}: {issue}",
                 priority=template['priority'],
@@ -354,11 +354,11 @@ class SmartSuggestionsEngine:
         
         return None
     
-    def _create_performance_suggestion(self, file_path: str, complexity: float) -> SmartSuggestion:
+    def _create_performance_suggestion(self, file_path: str, complexity: float) -> Suggestion:
         """Create performance-specific suggestion"""
         template = self.suggestion_patterns['performance']['high_complexity']
         
-        return SmartSuggestion(
+        return Suggestion(
             title=f"Optimize {file_path.split('/')[-1]}",
             description=f"High complexity score ({complexity:.1f}) indicates performance optimization opportunity",
             priority=Priority.HIGH if complexity > 7 else Priority.MEDIUM,
@@ -384,11 +384,11 @@ class SmartSuggestionsEngine:
             reasoning=f"High complexity ({complexity:.1f}) correlates with performance issues"
         )
     
-    def _create_architecture_pattern_suggestion(self) -> SmartSuggestion:
+    def _create_architecture_pattern_suggestion(self) -> Suggestion:
         """Create architecture pattern suggestion"""
         template = self.suggestion_patterns['architecture']['missing_patterns']
         
-        return SmartSuggestion(
+        return Suggestion(
             title="Implement Architectural Patterns",
             description="Code structure could benefit from established design patterns",
             priority=template['priority'],
@@ -414,11 +414,11 @@ class SmartSuggestionsEngine:
             reasoning="No clear architectural patterns detected in codebase"
         )
     
-    def _create_coupling_suggestion(self, bottlenecks: List[str]) -> SmartSuggestion:
+    def _create_coupling_suggestion(self, bottlenecks: List[str]) -> Suggestion:
         """Create coupling reduction suggestion"""
         template = self.suggestion_patterns['architecture']['tight_coupling']
         
-        return SmartSuggestion(
+        return Suggestion(
             title="Reduce Component Coupling",
             description=f"High coupling detected in {len(bottlenecks)} components",
             priority=template['priority'],
@@ -444,11 +444,11 @@ class SmartSuggestionsEngine:
             reasoning="High coupling detected in architecture analysis"
         )
     
-    def _create_complexity_suggestion(self, file_path: str, complexity: float) -> SmartSuggestion:
+    def _create_complexity_suggestion(self, file_path: str, complexity: float) -> Suggestion:
         """Create complexity reduction suggestion"""
         template = self.suggestion_patterns['quality']['long_methods']
         
-        return SmartSuggestion(
+        return Suggestion(
             title=f"Refactor Complex Code in {file_path.split('/')[-1]}",
             description=f"Complexity score {complexity:.1f} exceeds recommended threshold",
             priority=Priority.HIGH if complexity > 8 else Priority.MEDIUM,
@@ -474,11 +474,11 @@ class SmartSuggestionsEngine:
             reasoning=f"Complexity score {complexity:.1f} is above recommended threshold"
         )
     
-    def _create_tech_debt_suggestion(self, file_path: str, debt_indicators: List[str]) -> SmartSuggestion:
+    def _create_tech_debt_suggestion(self, file_path: str, debt_indicators: List[str]) -> Suggestion:
         """Create technical debt suggestion"""
         template = self.suggestion_patterns['quality']['technical_debt']
         
-        return SmartSuggestion(
+        return Suggestion(
             title=f"Address Technical Debt in {file_path.split('/')[-1]}",
             description=f"Technical debt markers found: {', '.join(debt_indicators[:3])}",
             priority=Priority.MEDIUM,
@@ -504,7 +504,7 @@ class SmartSuggestionsEngine:
             reasoning=f"Technical debt indicators detected: {', '.join(debt_indicators)}"
         )
     
-    def _generate_context_suggestions(self, query: str, domain: str, code_analysis: Dict[str, Any]) -> List[SmartSuggestion]:
+    def _generate_context_suggestions(self, query: str, domain: str, code_analysis: Dict[str, Any]) -> List[Suggestion]:
         """Generate suggestions based on query context"""
         suggestions = []
         query_lower = query.lower()
@@ -524,9 +524,9 @@ class SmartSuggestionsEngine:
         
         return suggestions
     
-    def _create_testing_suggestion(self, code_analysis: Dict[str, Any]) -> SmartSuggestion:
+    def _create_testing_suggestion(self, code_analysis: Dict[str, Any]) -> Suggestion:
         """Create testing-related suggestion"""
-        return SmartSuggestion(
+        return Suggestion(
             title="Improve Test Coverage",
             description="Enhance testing strategy for better code quality",
             priority=Priority.MEDIUM,
@@ -553,9 +553,9 @@ class SmartSuggestionsEngine:
             reasoning="Testing mentioned in query, suggesting testing improvements needed"
         )
     
-    def _create_deployment_suggestion(self) -> SmartSuggestion:
+    def _create_deployment_suggestion(self) -> Suggestion:
         """Create deployment-related suggestion"""
-        return SmartSuggestion(
+        return Suggestion(
             title="Optimize Deployment Pipeline",
             description="Improve deployment process for reliability and speed",
             priority=Priority.MEDIUM,
@@ -582,7 +582,7 @@ class SmartSuggestionsEngine:
             reasoning="Deployment mentioned in query, suggesting deployment improvements needed"
         )
     
-    def _create_monitoring_suggestion(self, domain: str) -> SmartSuggestion:
+    def _create_monitoring_suggestion(self, domain: str) -> Suggestion:
         """Create monitoring-related suggestion"""
         
         domain_specific_metrics = {
@@ -594,7 +594,7 @@ class SmartSuggestionsEngine:
         
         metrics = domain_specific_metrics.get(domain, ['System health', 'Error rates', 'Performance metrics'])
         
-        return SmartSuggestion(
+        return Suggestion(
             title=f"Implement {domain.title()} Monitoring",
             description=f"Set up comprehensive monitoring for {domain} aspects",
             priority=Priority.MEDIUM,
@@ -621,9 +621,9 @@ class SmartSuggestionsEngine:
             reasoning=f"Monitoring mentioned in query for {domain} domain"
         )
     
-    def _create_documentation_suggestion(self) -> SmartSuggestion:
+    def _create_documentation_suggestion(self) -> Suggestion:
         """Create documentation-related suggestion"""
-        return SmartSuggestion(
+        return Suggestion(
             title="Improve Code Documentation",
             description="Enhance documentation for better maintainability",
             priority=Priority.LOW,
@@ -650,7 +650,7 @@ class SmartSuggestionsEngine:
             reasoning="Documentation mentioned in query, suggesting documentation improvements needed"
         )
     
-    def _generate_tech_suggestions(self, file_analyses: List[Any]) -> List[SmartSuggestion]:
+    def _generate_tech_suggestions(self, file_analyses: List[Any]) -> List[Suggestion]:
         """Generate technology-specific suggestions"""
         suggestions = []
         
@@ -669,7 +669,7 @@ class SmartSuggestionsEngine:
             tech_suggestions = self.tech_specific_suggestions.get(main_language, {})
             
             for pattern, description in tech_suggestions.items():
-                suggestion = SmartSuggestion(
+                suggestion = Suggestion(
                     title=f"Modernize {main_language.title()} Code",
                     description=description,
                     priority=Priority.LOW,
@@ -695,13 +695,13 @@ class SmartSuggestionsEngine:
         
         return suggestions
     
-    def _generate_expert_suggestions(self, expert_analysis: Any) -> List[SmartSuggestion]:
+    def _generate_expert_suggestions(self, expert_analysis: Any) -> List[Suggestion]:
         """Generate suggestions from expert analysis"""
         suggestions = []
         
         if hasattr(expert_analysis, 'actionable_recommendations'):
             for rec in expert_analysis.actionable_recommendations[:3]:  # Top 3 expert recommendations
-                suggestion = SmartSuggestion(
+                suggestion = Suggestion(
                     title=f"Expert Recommendation: {rec.get('text', '')[:50]}...",
                     description=rec.get('text', ''),
                     priority=Priority(rec.get('priority', 'medium')),
@@ -721,7 +721,7 @@ class SmartSuggestionsEngine:
         
         return suggestions
     
-    def _generate_proactive_suggestions(self, domain: str, file_analyses: List[Any]) -> List[SmartSuggestion]:
+    def _generate_proactive_suggestions(self, domain: str, file_analyses: List[Any]) -> List[Suggestion]:
         """Generate proactive suggestions to prevent future issues"""
         suggestions = []
         
@@ -731,7 +731,7 @@ class SmartSuggestionsEngine:
         if practices:
             practice = practices[0]  # Pick one practice to suggest
             
-            suggestion = SmartSuggestion(
+            suggestion = Suggestion(
                 title=f"Implement {domain.title()} Best Practice",
                 description=f"Proactive improvement: {practice}",
                 priority=Priority.LOW,
@@ -756,7 +756,7 @@ class SmartSuggestionsEngine:
         
         return suggestions
     
-    def _prioritize_and_deduplicate(self, suggestions: List[SmartSuggestion]) -> List[SmartSuggestion]:
+    def _prioritize_and_deduplicate(self, suggestions: List[Suggestion]) -> List[Suggestion]:
         """Prioritize suggestions and remove duplicates"""
         
         # Remove duplicates based on title similarity
@@ -784,7 +784,7 @@ class SmartSuggestionsEngine:
         
         return unique_suggestions
     
-    def get_suggestion_summary(self, suggestions: List[SmartSuggestion]) -> Dict[str, Any]:
+    def get_suggestion_summary(self, suggestions: List[Suggestion]) -> Dict[str, Any]:
         """Get summary of suggestions for reporting"""
         
         summary = {
