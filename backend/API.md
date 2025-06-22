@@ -64,6 +64,10 @@ GET `/api/repository/{repo_id}/stats`
 GET `/api/repository/{repo_id}/commits?limit=50`
 - Returns recent commits with metadata.
 
+### Get Commit Files
+GET `/api/repository/{repo_id}/commit/{commit_hash}/files?include_diff_stats=false`
+- Lists all files changed in a specific commit with optional diff statistics.
+
 ### Cleanup Repository
 DELETE `/api/repository/{repo_id}`
 - Deletes local clone and resources.
