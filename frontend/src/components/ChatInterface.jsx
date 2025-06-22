@@ -301,10 +301,9 @@ function ChatInterface({
       prompt: "Are there any security vulnerabilities or concerns in recent changes?",
       icon: <Search className="w-4 h-4" />    }
   ]
-
   return (
-    <div className={`flex flex-col h-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg transition-all duration-300 ease-in-out ${
-      isMaximized ? 'fixed inset-2 z-50 shadow-2xl' : ''
+    <div className={`flex flex-col bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg transition-all duration-300 ease-in-out ${
+      isMaximized ? 'fixed inset-2 z-[60] shadow-2xl max-h-[calc(100vh-1rem)]' : 'h-full'
     }`}>
       {/* Chat Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">

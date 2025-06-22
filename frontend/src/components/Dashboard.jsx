@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import MainContent from './MainContent'
+import AddRepositoryDialog from './AddRepositoryDialog'
 import { useRepository } from '../contexts/RepositoryContext'
+import { diffSenseAPI } from '../services/api'
 
 function Dashboard({ user, onLogout }) {
     const [repositories, setRepositories] = useState([])
@@ -15,6 +17,7 @@ function Dashboard({ user, onLogout }) {
     })
     const [searchQuery, setSearchQuery] = useState('')
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+    const [showAddDialog, setShowAddDialog] = useState(false)
 
     const { selectRepository, selectedRepo, isLoading: isRepositoryLoading } = useRepository()
 
@@ -53,17 +56,51 @@ function Dashboard({ user, onLogout }) {
         setFavorites(prev =>
             prev.includes(repoId)
                 ? prev.filter(id => id !== repoId)
-                : [...prev, repoId]
-        )
+                : [...prev, repoId]        )
     }
 
     const handleAddRepository = async (owner, repoName) => {
-        // This is kept for compatibility with the browse functionality
-        // The URL functionality is now handled in the Sidebar component
         try {
-            // Fetch repository details from GitHub API (if needed for browse mode)
-            // For now, this is just a placeholder
-            console.log('Adding repository:', owner, repoName)
+            // Construct the repository URL
+            const repoUrl = `https://github.com/${owner}/${repoName}`
+            
+            console.log('Adding repository:', repoUrl)
+            
+            // Use DiffSense API to clone and analyze the repository
+            const result = await diffSenseAPI.cloneRepository(repoUrl)
+            
+            console.log('Repository cloned successfully:', result)
+            
+            // Create a repository object for the UI
+            const newRepo = {
+                id: `${owner}/${repoName}`,
+                name: repoName,
+                full_name: `${owner}/${repoName}`,
+                owner: { login: owner },
+                html_url: repoUrl,
+                clone_url: `${repoUrl}.git`,
+                description: 'Repository added via DiffSense',
+                private: false, // We'll assume public for now
+                stargazers_count: 0,
+                forks_count: 0,
+                language: null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                repo_id: result.repo_id // Store the DiffSense repo ID
+            }
+            
+            // Add to repositories list
+            setRepositories(prev => {
+                // Check if already exists
+                if (prev.some(repo => repo.id === newRepo.id)) {
+                    throw new Error('Repository already added')
+                }
+                return [...prev, newRepo]
+            })
+            
+            // Immediately select the new repository
+            selectRepository(newRepo)
+            
         } catch (error) {
             console.error('Error adding repository:', error)
             throw error
@@ -121,7 +158,7 @@ function Dashboard({ user, onLogout }) {
                 transform transition-transform duration-300 ease-in-out
                 ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
                 lg:flex lg:flex-shrink-0 h-full
-            `}><Sidebar
+            `}>                <Sidebar
                     repositories={sortedRepositories}
                     selectedRepo={selectedRepo}
                     onSelectRepo={handleSelectRepo}
@@ -136,14 +173,22 @@ function Dashboard({ user, onLogout }) {
                     setRepositories={setRepositories}
                     onCloseMobileSidebar={() => setIsMobileSidebarOpen(false)}
                     isRepositoryLoading={isRepositoryLoading}
+                    onShowAddDialog={() => setShowAddDialog(true)}
                 />
             </div>            {/* Main content area */}
-            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent
-                    user={user}
+            <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden"><MainContent                    user={user}
                     onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
                     isMobileSidebarOpen={isMobileSidebarOpen}
                 />
             </div>
+
+            {/* Add Repository Dialog */}
+            <AddRepositoryDialog
+                isOpen={showAddDialog}
+                onClose={() => setShowAddDialog(false)}
+                onAddRepository={handleAddRepository}
+                repositories={repositories}
+            />
         </div>
     )
 }
