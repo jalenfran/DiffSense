@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import Sidebar from './Sidebar'
 import MainContent from './MainContent'
-import axios from 'axios'
+import { useRepository } from '../contexts/RepositoryContext'
 
 function Dashboard({ user, onLogout }) {
     const [repositories, setRepositories] = useState([])
-    const [selectedRepo, setSelectedRepo] = useState(null)
     const [favorites, setFavorites] = useState(() => {
         const saved = localStorage.getItem('diffsense-favorites')
         return saved ? JSON.parse(saved) : []
@@ -16,6 +15,8 @@ function Dashboard({ user, onLogout }) {
     })
     const [searchQuery, setSearchQuery] = useState('')
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
+
+    const { selectRepository, selectedRepo } = useRepository()
 
     useEffect(() => {
         localStorage.setItem('diffsense-favorites', JSON.stringify(favorites))
@@ -38,7 +39,7 @@ function Dashboard({ user, onLogout }) {
     }, [])
 
     const handleSelectRepo = (repo) => {
-        setSelectedRepo(repo)
+        selectRepository(repo)
         setIsMobileSidebarOpen(false) // Close mobile sidebar when repo is selected
 
         // Update recently viewed list
@@ -57,17 +58,12 @@ function Dashboard({ user, onLogout }) {
     }
 
     const handleAddRepository = async (owner, repoName) => {
+        // This is kept for compatibility with the browse functionality
+        // The URL functionality is now handled in the Sidebar component
         try {
-            // Fetch repository details from GitHub API
-            const response = await axios.get(`/repos/${owner}/${repoName}/stats`)
-            const repoData = response.data.repository
-
-            // Check if repo already exists
-            if (repositories.some(repo => repo.id === repoData.id)) {
-                throw new Error('Repository already added')
-            }
-
-            setRepositories(prev => [...prev, repoData])
+            // Fetch repository details from GitHub API (if needed for browse mode)
+            // For now, this is just a placeholder
+            console.log('Adding repository:', owner, repoName)
         } catch (error) {
             console.error('Error adding repository:', error)
             throw error
@@ -145,9 +141,7 @@ function Dashboard({ user, onLogout }) {
             </div>
 
             {/* Main content area */}
-            <div className="flex-1 flex flex-col min-w-0">
-                <MainContent
-                    selectedRepo={selectedRepo}
+            <div className="flex-1 flex flex-col min-w-0">                <MainContent
                     user={user}
                     onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
                     isMobileSidebarOpen={isMobileSidebarOpen}

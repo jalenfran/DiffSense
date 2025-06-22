@@ -54,8 +54,7 @@ function Sidebar({
             setAvailableRepos(response.data)
         } catch (error) {
             console.error('Failed to fetch repositories:', error)
-            alert('Failed to load your repositories')
-        } finally {
+            alert('Failed to load your repositories')        } finally {
             setLoadingRepos(false)
         }
     }
@@ -64,6 +63,7 @@ function Sidebar({
         window.location.href = 'http://localhost:3000/auth/logout'
         onLogout()
     }
+    
     const handleAddRepository = async (repoData = null) => {
         setIsLoading(true)
         try {
@@ -76,18 +76,42 @@ function Sidebar({
                 setShowAddDialog(false)
                 setRepoSearchQuery('')
             } else {
-                // Adding from URL
+                // Adding from URL - create a mock repo object for the UI
                 if (!newRepoUrl.trim()) return
 
-                // Parse GitHub URL to extract owner/repo
+                // Validate GitHub URL
                 const match = newRepoUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/)
                 if (!match) {
                     alert('Please enter a valid GitHub repository URL')
                     return
                 }
 
-                const [, owner, repo] = match
-                await onAddRepository(owner, repo.replace('.git', ''))
+                const [, owner, repoName] = match
+                const cleanRepoName = repoName.replace('.git', '')
+                
+                // Create a mock repository object for the UI
+                const mockRepo = {
+                    id: `${owner}/${cleanRepoName}`, // Use owner/repo as unique ID
+                    name: cleanRepoName,
+                    full_name: `${owner}/${cleanRepoName}`,
+                    owner: { login: owner },
+                    html_url: newRepoUrl,
+                    clone_url: newRepoUrl,
+                    description: 'Repository added via URL',
+                    private: false, // We can't know this, assume public
+                    stargazers_count: 0,
+                    forks_count: 0,
+                    language: null,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }
+
+                // Check if repo already exists
+                if (repositories.some(repo => repo.id === mockRepo.id)) {
+                    throw new Error('Repository already added')
+                }
+
+                setRepositories(prev => [...prev, mockRepo])
                 setNewRepoUrl('')
                 setShowAddDialog(false)
             }
