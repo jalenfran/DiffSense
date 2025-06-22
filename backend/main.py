@@ -78,6 +78,15 @@ from src.enhanced_rag_system import EnhancedRAGSystem
 from src.advanced_claude_analyzer import AdvancedClaudeAnalyzer
 from src.smart_suggestions_engine import SmartSuggestionsEngine
 
+# Advanced Breaking Change Detection imports
+from src.advanced_breaking_change_detector import (
+    AdvancedBreakingChangeDetector, 
+    BreakingChange, 
+    ChangeType, 
+    ImpactSeverity,
+    ChangeIntent
+)
+
 app = FastAPI(title="DiffSense API", description="Semantic drift detection for git repositories")
 
 # Configure CORS
@@ -117,6 +126,9 @@ class AnalyzeFunctionRequest(BaseModel):
     file_path: str
     function_name: str
     max_commits: int = 50
+
+class CommitAnalysisRequest(BaseModel):
+    commit_hash: str
 
 # Authentication models
 class GitHubOAuthRequest(BaseModel):
@@ -2049,6 +2061,8 @@ async def get_semantic_drift_analysis(
                     "avg_risk": float(np.mean([r["risk_score"] for r in semantic_patterns["risk_evolution"]])) if semantic_patterns["risk_evolution"] else 0,
                     "max_risk": float(max([r["risk_score"] for r in semantic_patterns["risk_evolution"]])) if semantic_patterns["risk_evolution"] else 0,
                     "total_breaking_changes": sum(r["breaking_changes"] for r in semantic_patterns["risk_evolution"])
+               
+
                 }
             },
             "developer_impact": {
@@ -2309,19 +2323,96 @@ async def get_file_content(
                 try:
                     diffs = parent_commit.diff(commit, paths=[file_path], create_patch=True)
                     if not diffs:
-                        raise HTTPException(status_code=404, detail="No changes found for this file in this commit")
+                        # Check if file exists in both commits
+                        base_has_file = file_path in [item.path for item in parent_commit.tree.traverse() if item.type == 'blob']
+                        head_has_file = file_path in [item.path for item in commit.tree.traverse() if item.type == 'blob']
+                        
+                        if not base_has_file and not head_has_file:
+                            raise HTTPException(status_code=404, detail="File not found in either commit")
+                        elif not base_has_file:
+                            # File was added
+                            file_content = commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                            diff_content = f"--- /dev/null\n+++ b/{file_path}\n"
+                            for line in file_content.split('\n'):
+                                diff_content += f"+{line}\n"
+                            
+                            return {
+                                "repo_id": repo_id,
+                                "base_commit": parent_commit.hexsha,
+                                "head_commit": commit.hexsha,
+                                "file_path": file_path,
+                                "change_type": "added",
+                                "diff": diff_content
+                            }
+                        elif not head_has_file:
+                            # File was deleted
+                            file_content = parent_commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                            diff_content = f"--- a/{file_path}\n+++ /dev/null\n"
+                            for line in file_content.split('\n'):
+                                diff_content += f"-{line}\n"
+                            
+                            return {
+                                "repo_id": repo_id,
+                                "base_commit": parent_commit.hexsha,
+                                "head_commit": commit.hexsha,
+                                "file_path": file_path,
+                                "change_type": "deleted",
+                                "diff": diff_content
+                            }
+                        else:
+                            return {
+                                "repo_id": repo_id,
+                                "base_commit": parent_commit.hexsha,
+                                "head_commit": commit.hexsha,
+                                "file_path": file_path,
+                                "change_type": "unchanged",
+                                "diff": "No changes detected",
+                                "message": "File exists in both commits but no differences found"
+                            }
+                
+                    diff_item = diffs[0]
+                    change_type_map = {
+                        'A': 'added',
+                        'D': 'deleted',
+                        'M': 'modified',
+                        'R': 'renamed',
+                        'C': 'copied'
+                    }
                     
-                    diff_content = str(diffs[0])
+                    # Calculate diff stats
+                    diff_stats = {"insertions": 0, "deletions": 0}
+                    if diff_item.diff:
+                        diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                        insertions = diff_text.count('\n+') - diff_text.count('\n+++')
+                        deletions = diff_text.count('\n-') - diff_text.count('\n---')
+                        diff_stats = {
+                            "insertions": max(0, insertions),
+                            "deletions": max(0, deletions),
+                            "changes": max(0, insertions) + max(0, deletions)
+                        }
+                    
                     return {
                         "repo_id": repo_id,
+                        "base_commit": parent_commit.hexsha,
+                        "head_commit": commit.hexsha,
                         "file_path": file_path,
-                        "commit_hash": commit_hash,
-                        "parent_commit": parent_commit.hexsha,
-                        "type": "diff",
-                        "content": diff_content,
-                        "change_type": diffs[0].change_type,
-                        "insertions": diffs[0].diff.decode('utf-8').count('\n+') if diffs[0].diff else 0,
-                        "deletions": diffs[0].diff.decode('utf-8').count('\n-') if diffs[0].diff else 0
+                        "change_type": change_type_map.get(diff_item.change_type, 'modified'),
+                        "diff": str(diff_item),
+                        "diff_stats": diff_stats,
+                        "commit_info": {
+                            "base": {
+                                "hash": parent_commit.hexsha,
+                                "message": parent_commit.message.strip(),
+                                "author": parent_commit.author.name,
+                                "date": parent_commit.committed_datetime.isoformat()
+                            },
+                            "head": {
+                                "hash": commit.hexsha,
+                                "message": commit.message.strip(),
+                                "author": commit.author.name,
+                                "date": commit.committed_datetime.isoformat()
+                            }
+                        }
                     }
                 except Exception as e:
                     raise HTTPException(status_code=404, detail=f"Error generating diff: {str(e)}")
@@ -2452,7 +2543,7 @@ async def get_file_history(
                         diff_item = diffs[0]
                         change_type_map = {
                             'A': 'added',
-                            'D': 'deleted', 
+                            'D': 'deleted',
                             'M': 'modified',
                             'R': 'renamed',
                             'C': 'copied'
@@ -2562,8 +2653,8 @@ async def compare_commits(
                         
                         return {
                             "repo_id": repo_id,
-                            "base_commit": base_commit,
-                            "head_commit": head_commit,
+                            "base_commit": base_commit.hexsha,
+                            "head_commit": head_commit.hexsha,
                             "file_path": file_path,
                             "change_type": "added",
                             "diff": diff_content
@@ -2577,8 +2668,8 @@ async def compare_commits(
                         
                         return {
                             "repo_id": repo_id,
-                            "base_commit": base_commit,
-                            "head_commit": head_commit,
+                            "base_commit": base_commit.hexsha,
+                            "head_commit": head_commit.hexsha,
                             "file_path": file_path,
                             "change_type": "deleted",
                             "diff": diff_content
@@ -2586,8 +2677,8 @@ async def compare_commits(
                     else:
                         return {
                             "repo_id": repo_id,
-                            "base_commit": base_commit,
-                            "head_commit": head_commit,
+                            "base_commit": base_commit.hexsha,
+                            "head_commit": head_commit.hexsha,
                             "file_path": file_path,
                             "change_type": "unchanged",
                             "diff": "No changes detected",
@@ -2617,8 +2708,8 @@ async def compare_commits(
                 
                 return {
                     "repo_id": repo_id,
-                    "base_commit": base_commit,
-                    "head_commit": head_commit,
+                    "base_commit": base_commit.hexsha,
+                    "head_commit": head_commit.hexsha,
                     "file_path": file_path,
                     "change_type": change_type_map.get(diff_item.change_type, 'modified'),
                     "diff": str(diff_item),
@@ -2663,10 +2754,6 @@ async def compare_commits(
                     "file_path": file_path,
                     "change_type": change_type_map.get(diff_item.change_type, 'modified')
                 }
-                
-                if diff_item.change_type == 'R':
-                    file_info["old_path"] = diff_item.a_path
-                    file_info["new_path"] = diff_item.b_path
                 
                 # Calculate diff stats
                 if diff_item.diff:
@@ -2818,3 +2905,300 @@ def normalize_repository_url(repo_url: str) -> str:
             url = f"{protocol}://{parts[1]}"
     
     return url
+
+# ===== ADVANCED BREAKING CHANGE DETECTION ENDPOINT =====
+
+@app.post("/api/repository/{repo_id}/analyze-breaking-changes")
+async def analyze_breaking_changes(
+    repo_id: str,
+    request: dict,
+    current_user: str = Depends(require_repository_access)
+):
+    """
+    Analyze commits for breaking changes using the advanced breaking change detector.
+    
+    Request body can contain:
+    - commit_hashes: List of specific commits to analyze
+    - since_commit: Analyze all commits since this commit hash
+    - days_back: Analyze commits from the last N days (default: 7)
+    - include_context: Include detailed context and file analysis (default: true)
+    - ai_analysis: Use AI-powered analysis for deeper insights (default: true)
+    """
+    try:
+        if repo_id not in active_repos:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        git_analyzer = active_repos[repo_id]
+        
+        # Initialize the advanced breaking change detector
+        from src.advanced_breaking_change_detector import AdvancedBreakingChangeDetector
+        detector = AdvancedBreakingChangeDetector(git_analyzer, claude_analyzer)
+        
+        # Parse request parameters
+        commit_hashes = request.get('commit_hashes', [])
+        since_commit = request.get('since_commit')
+        days_back = request.get('days_back', 7)
+        include_context = request.get('include_context', True)
+        ai_analysis = request.get('ai_analysis', True)
+        
+        # Get commits to analyze
+        repo = git_analyzer.repo
+        commits_to_analyze = []
+        
+        if commit_hashes:
+            # Analyze specific commits
+            for commit_hash in commit_hashes:
+                try:
+                    commit = repo.commit(commit_hash)
+                    commits_to_analyze.append(commit)
+                except Exception as e:
+                    logger.warning(f"Could not find commit {commit_hash}: {e}")
+        
+        elif since_commit:
+            # Analyze commits since a specific commit
+            try:
+                since = repo.commit(since_commit)
+                commits_to_analyze = list(repo.iter_commits(
+                    rev=f"{since_commit}..HEAD",
+                    max_count=100  # Limit to prevent excessive analysis
+                ))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid since_commit: {e}")
+        
+        else:
+            # Analyze commits from the last N days
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+            
+            commits_to_analyze = []
+            for commit in repo.iter_commits(max_count=200):
+                if commit.committed_datetime.replace(tzinfo=None) >= cutoff_date:
+                    commits_to_analyze.append(commit)
+                else:
+                    break
+        
+        if not commits_to_analyze:
+            return {
+                "repo_id": repo_id,
+                "analysis_type": "breaking_changes",
+                "commits_analyzed": 0,
+                "breaking_changes": [],
+                "summary": {
+                    "total_changes": 0,
+                    "critical_changes": 0,
+                    "high_impact_changes": 0,
+                    "accidental_changes": 0
+                },
+                "recommendations": {
+                    "immediate_actions": ["No commits found to analyze"],
+                    "migration_strategy": ["No migration needed"],
+                    "communication_plan": ["No communication needed"],
+                    "testing_recommendations": ["Standard testing sufficient"]
+                }
+            }
+        
+        # Analyze each commit for breaking changes
+        all_breaking_changes = []
+        commit_analyses = []
+        
+        logger.info(f"Analyzing {len(commits_to_analyze)} commits for breaking changes")
+        
+        for commit in commits_to_analyze:
+            try:
+                # Get commit diff
+                if commit.parents:
+                    parent = commit.parents[0]
+                    diff_index = parent.diff(commit)
+                else:
+                    # First commit - analyze all files as additions
+                    diff_index = commit.diff(None)
+                
+                # Analyze the commit
+                analysis_result = detector.analyze_commit_for_breaking_changes(
+                    commit, 
+                    diff_index,
+                    include_context=include_context,
+                    ai_analysis=ai_analysis
+                )
+                
+                if analysis_result.breaking_changes:
+                    all_breaking_changes.extend(analysis_result.breaking_changes)
+                
+                commit_analyses.append({
+                    "commit_hash": commit.hexsha,
+                    "short_hash": commit.hexsha[:8],
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "date": commit.committed_datetime.isoformat(),
+                    "breaking_changes_count": len(analysis_result.breaking_changes),
+                    "files_analyzed": analysis_result.files_analyzed,
+                    "analysis_duration": analysis_result.analysis_duration,
+                    "breaking_changes": [bc.to_dict() for bc in analysis_result.breaking_changes] if include_context else []
+                })
+                
+            except Exception as e:
+                logger.error(f"Error analyzing commit {commit.hexsha}: {e}")
+                commit_analyses.append({
+                    "commit_hash": commit.hexsha,
+                    "short_hash": commit.hexsha[:8],
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "date": commit.committed_datetime.isoformat(),
+                    "breaking_changes_count": 0,
+                    "files_analyzed": 0,
+                    "error": str(e)
+                })
+        
+        # Generate summary statistics
+        critical_changes = [bc for bc in all_breaking_changes if bc.severity.value == "critical"]
+        high_impact_changes = [bc for bc in all_breaking_changes if bc.severity.value in ["critical", "high"]]
+        accidental_changes = [bc for bc in all_breaking_changes if bc.intent.value == "accidental"]
+        
+        # Generate recommendations
+        recommendations = {
+            "immediate_actions": _get_immediate_actions(all_breaking_changes),
+            "migration_strategy": _get_migration_strategy(all_breaking_changes),
+            "communication_plan": _get_communication_plan(all_breaking_changes),
+            "testing_recommendations": _get_testing_recommendations(all_breaking_changes)
+        }
+        
+        # Create response
+        response = {
+            "repo_id": repo_id,
+            "analysis_type": "breaking_changes",
+            "analysis_params": {
+                "commit_hashes": commit_hashes if commit_hashes else None,
+                "since_commit": since_commit,
+                "days_back": days_back if not commit_hashes and not since_commit else None,
+                "include_context": include_context,
+                "ai_analysis": ai_analysis
+            },
+            "commits_analyzed": len(commits_to_analyze),
+            "commits_details": commit_analyses,
+            "breaking_changes": [bc.to_dict() for bc in all_breaking_changes] if include_context else [],
+            "summary": {
+                "total_changes": len(all_breaking_changes),
+                "critical_changes": len(critical_changes),
+                "high_impact_changes": len(high_impact_changes),
+                "accidental_changes": len(accidental_changes),
+                "change_types": _get_change_type_distribution(all_breaking_changes),
+                "affected_files": len(set(bc.file_path for bc in all_breaking_changes if bc.file_path))
+            },
+            "recommendations": recommendations,
+            "analysis_timestamp": datetime.now().isoformat()
+        }
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error analyzing breaking changes: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to analyze breaking changes: {str(e)}")
+
+def _get_immediate_actions(breaking_changes) -> List[str]:
+    """Get immediate actions based on breaking changes"""
+    actions = []
+    
+    critical = [c for c in breaking_changes if c.severity.value == "critical"]
+    if critical:
+        actions.append("🚨 URGENT: Review critical breaking changes immediately")
+        actions.append(f"📋 Analyze impact of {len(critical)} critical changes")
+    
+    accidental = [c for c in breaking_changes if c.intent.value == "accidental"]
+    if accidental:
+        actions.append(f"🔍 Investigate {len(accidental)} accidental breaking changes")
+        actions.append("🛠️ Consider reverting or fixing accidental changes")
+    
+    api_changes = [c for c in breaking_changes if c.change_type.value == "api_signature_change"]
+    if api_changes:
+        actions.append("📢 Notify API consumers of upcoming changes")
+        actions.append("📝 Update API documentation")
+    
+    if not actions:
+        actions.append("✅ No immediate actions required")
+    
+    return actions
+
+def _get_migration_strategy(breaking_changes) -> List[str]:
+    """Get migration strategy recommendations"""
+    strategies = []
+    
+    if not breaking_changes:
+        return ["No migration required"]
+    
+    # Group by migration complexity
+    complex_changes = [c for c in breaking_changes if c.migration_complexity in ["complex", "very_complex"]]
+    moderate_changes = [c for c in breaking_changes if c.migration_complexity == "moderate"]
+    
+    if complex_changes:
+        strategies.append("🎯 Phase 1: Address complex migrations first")
+        strategies.append("📋 Create detailed migration guides for complex changes")
+        strategies.append("🧪 Implement comprehensive testing for complex migrations")
+    
+    if moderate_changes:
+        strategies.append("⚡ Phase 2: Handle moderate complexity migrations")
+        strategies.append("🔄 Provide backward compatibility where possible")
+    
+    strategies.append("📚 Create migration documentation and examples")
+    strategies.append("🤝 Provide support channels for migration assistance")
+    
+    return strategies
+
+def _get_communication_plan(breaking_changes) -> List[str]:
+    """Get communication plan for breaking changes"""
+    plan = []
+    
+    if not breaking_changes:
+        return ["No communication required"]
+    
+    high_impact = [c for c in breaking_changes if c.severity.value in ["critical", "high"]]
+    
+    if high_impact:
+        plan.append("📢 Send advance notice to all affected users")
+        plan.append("📧 Email notification 2 weeks before deployment")
+        plan.append("📝 Publish detailed changelog with migration instructions")
+    
+    plan.append("🔗 Update documentation and examples")
+    plan.append("💬 Monitor support channels for migration issues")
+    plan.append("📊 Track adoption and migration progress")
+    
+    return plan
+
+def _get_testing_recommendations(breaking_changes) -> List[str]:
+    """Get testing recommendations for breaking changes"""
+    recommendations = []
+    
+    if not breaking_changes:
+        return ["Standard testing sufficient"]
+    
+    api_changes = [c for c in breaking_changes if c.change_type.value == "api_signature_change"]
+    behavioral_changes = [c for c in breaking_changes if c.change_type.value == "behavioral_change"]
+    
+    if api_changes:
+        recommendations.append("🧪 Run comprehensive API integration tests")
+        recommendations.append("📝 Update contract tests for API changes")
+    
+    if behavioral_changes:
+        recommendations.append("🔍 Perform thorough behavioral testing")
+        recommendations.append("📊 Run performance regression tests")
+    
+    recommendations.append("🎯 Test all identified migration scenarios")
+    recommendations.append("🔄 Verify backward compatibility where applicable")
+    recommendations.append("🚀 Conduct staging environment validation")
+    
+    return recommendations
+
+def _get_change_type_distribution(breaking_changes):
+    """Get distribution of change types"""
+    from collections import defaultdict
+    distribution = defaultdict(int)
+    
+    for change in breaking_changes:
+        distribution[change.change_type.value] += 1
+    
+    return dict(distribution)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
