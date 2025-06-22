@@ -18,6 +18,7 @@ import {
   Maximize2,
   X
 } from 'lucide-react'
+import MarkdownRenderer from './MarkdownRenderer'
 
 const ChatMessage = ({ message, isUser, timestamp }) => {
   const [isExpanded, setIsExpanded] = useState(false)
@@ -35,8 +36,8 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
   const renderMessageContent = (content) => {
     if (typeof content === 'string') {
       return (
-        <div className="max-w-none text-gray-900 dark:text-gray-100">
-          <p className="whitespace-pre-wrap">{content}</p>
+        <div className="max-w-none">
+          <MarkdownRenderer content={content} />
         </div>
       )
     }
@@ -45,8 +46,8 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
     if (content.type === 'query_response') {
       return (
         <div className="space-y-4">
-          <div className="max-w-none text-gray-900 dark:text-gray-100">
-            <p className="whitespace-pre-wrap">{content.response}</p>
+          <div className="max-w-none">
+            <MarkdownRenderer content={content.response} />
           </div>
           
           {content.confidence && (
@@ -150,9 +151,9 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                       </span>
                       <span className="text-sm font-medium">{change.change_type}</span>
                     </div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">
-                      {change.description}
-                    </p>
+                    <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">
+                      <MarkdownRenderer content={change.description} className="text-sm" />
+                    </div>
                     <p className="text-xs text-gray-500 dark:text-gray-500 font-mono">
                       {change.file_path}
                     </p>
@@ -168,9 +169,9 @@ const ChatMessage = ({ message, isUser, timestamp }) => {
                 <Bot className="w-4 h-4 text-blue-500" />
                 <span className="font-medium text-blue-700 dark:text-blue-300">AI Analysis</span>
               </div>
-              <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
-                {content.claude_analysis.content}
-              </p>
+              <div className="text-sm">
+                <MarkdownRenderer content={content.claude_analysis.content} />
+              </div>
               {content.claude_analysis.suggestions && (
                 <div className="mt-2 space-y-1">
                   {content.claude_analysis.suggestions.map((suggestion, index) => (
