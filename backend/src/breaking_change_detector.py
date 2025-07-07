@@ -1381,7 +1381,7 @@ class BreakingChangeDetector:
                 new_signature=None,
                 confidence_score=0.85,
                 affected_users_estimate="most",
-                migration_complexity="medium",
+                migration_complexity="moderate",
                 description=f"JavaScript/TypeScript {func_info['type']} '{func_name}' was removed",
                 technical_details=f"The {func_info['type']} '{func_name}' is no longer available in {file_path}.\nOriginal definition: {func_info['full_match']}",
                 suggested_migration=f"Replace usage of '{func_name}' with alternative implementation.",
@@ -2822,3 +2822,116 @@ Focus on practical guidance for development teams."""
             'ai_analysis': change.ai_analysis,
             'recommendations': change.expert_recommendations
         }
+    
+    def analyze_breaking_changes(self, diff_text: str, file_path: str, commit_hash: str = "") -> Dict[str, Any]:
+        """
+        Analyze breaking changes from diff text
+        
+        Args:
+            diff_text: The diff content to analyze
+            file_path: Path to the file being analyzed
+            commit_hash: Optional commit hash for context
+            
+        Returns:
+            Dictionary containing detected breaking changes
+        """
+        try:
+            changes = []
+            
+            # Basic diff pattern analysis - looks for removed functions/methods
+            if diff_text and file_path:
+                changes.extend(self._detect_diff_patterns("", "", file_path, commit_hash, type('DiffItem', (), {'diff': diff_text})()))
+            
+            # Convert BreakingChange objects to dictionaries for compatibility
+            changes_dict = []
+            for change in changes:
+                changes_dict.append({
+                    'id': change.id,
+                    'type': change.change_type.value if hasattr(change.change_type, 'value') else str(change.change_type),
+                    'severity': change.severity.value if hasattr(change.severity, 'value') else str(change.severity),
+                    'description': change.description,
+                    'file_path': change.file_path,
+                    'affected_component': change.affected_component,
+                    'confidence_score': change.confidence_score,
+                    'suggested_migration': change.suggested_migration,
+                    'technical_details': change.technical_details
+                })
+            
+            return {
+                'changes': changes_dict,
+                'total_changes': len(changes_dict),
+                'file_path': file_path,
+                'analysis_methods': ['diff_pattern_analysis']
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing breaking changes from diff: {e}")
+            return {
+                'changes': [],
+                'total_changes': 0,
+                'file_path': file_path,
+                'error': str(e),
+                'analysis_methods': []
+            }
+    
+    def analyze_diff_text(self, diff_text: str, file_path: str) -> List[BreakingChange]:
+        """
+        Analyze diff text for breaking changes
+        
+        Args:
+            diff_text: The git diff text to analyze
+            file_path: The file path being analyzed
+            
+        Returns:
+            List of detected breaking changes
+        """
+        if not diff_text or not file_path:
+            return []
+            
+        try:
+            # Parse diff to extract old and new content
+            old_content, new_content = self._parse_diff_text(diff_text)
+            
+            if old_content is None or new_content is None:
+                logger.warning(f"Could not parse diff text for {file_path}")
+                return []
+            
+            # Use existing file change detection
+            return self._detect_file_changes(old_content, new_content, file_path)
+            
+        except Exception as e:
+            logger.error(f"Error analyzing diff text for {file_path}: {e}")
+            return []
+    
+    def _parse_diff_text(self, diff_text: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Parse git diff text to extract old and new content
+        
+        Returns:
+            Tuple of (old_content, new_content)
+        """
+        try:
+            lines = diff_text.split('\n')
+            old_lines = []
+            new_lines = []
+            
+            for line in lines:
+                if line.startswith('--- ') or line.startswith('+++ ') or line.startswith('@@'):
+                    continue
+                elif line.startswith('-'):
+                    old_lines.append(line[1:])  # Remove the '-' prefix
+                elif line.startswith('+'):
+                    new_lines.append(line[1:])  # Remove the '+' prefix
+                elif line.startswith(' '):
+                    # Context line - exists in both
+                    old_lines.append(line[1:])  # Remove the ' ' prefix
+                    new_lines.append(line[1:])
+            
+            old_content = '\n'.join(old_lines) if old_lines else ""
+            new_content = '\n'.join(new_lines) if new_lines else ""
+            
+            return old_content, new_content
+            
+        except Exception as e:
+            logger.error(f"Error parsing diff text: {e}")
+            return None, None

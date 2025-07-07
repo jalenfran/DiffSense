@@ -12,7 +12,7 @@ DiffSense is a revolutionary backend system that provides intelligent code analy
 - **Advanced Claude Analyzer** - Multi-expert AI consultation with domain expertise
 - **Smart Code Analyzer** - Intelligent code analysis with complexity metrics
 - **Smart Suggestions Engine** - Contextual recommendations and insights
-
+◊
 ### 📊 Core Capabilities
 - **Semantic Drift Detection** - Track code evolution and semantic changes
 - **Repository Risk Assessment** - Comprehensive risk analysis and scoring

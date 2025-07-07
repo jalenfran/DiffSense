@@ -627,22 +627,27 @@ async def send_chat_message(
         
         # Process query with RAG system
         if chat.repo_id and chat.repo_id in active_repos:
-            # Repository-specific query - create RAG system with specific git_analyzer
+            # Repository-specific query - create RAG system with specific git_analyzer and embedding_engine
             git_analyzer = active_repos[chat.repo_id]
-            repo_rag_system = RAGSystem(git_analyzer, claude_analyzer=claude_analyzer)
-            rag_result = repo_rag_system.enhanced_query(chat.repo_id, request.message, max_results=10)
+            repo_rag_system = RAGSystem(git_analyzer, claude_analyzer=claude_analyzer, embedding_engine=semantic_analyzer)
+            rag_result = repo_rag_system.query(chat.repo_id, request.message, max_results=10)
             query_type = "repository"
             claude_enhanced = True  # RAG system provides enhanced analysis
         else:
             # General query (fallback response)
-            rag_result = RepositoryQueryResponse(
+            from src.rag_system import QueryResult
+            rag_result = QueryResult(
                 query=request.message,
                 response="I'm ready to help analyze repositories once you've cloned one.",
                 confidence=1.0,
                 sources=[],
                 context_used=[],
                 suggestions=["Clone a repository first using the /api/clone-repository endpoint"],
-                claude_enhanced=False
+                code_insights={},
+                architecture_analysis=None,
+                security_analysis=None,
+                quality_metrics=None,
+                breaking_change_analysis=None
             )
             query_type = "general"
             claude_enhanced = False
@@ -3911,4 +3916,4 @@ def _get_change_type_distribution(breaking_changes):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
