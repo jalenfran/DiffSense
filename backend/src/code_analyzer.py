@@ -43,6 +43,7 @@ class FileAnalysis:
     architecture_patterns: List[str]
     lines_of_code: int
     technical_debt_indicators: List[str]
+    content: str = ""  # Store the original file content for Claude analysis
 
 @dataclass
 class ArchitectureAnalysis:
@@ -177,7 +178,8 @@ class CodeAnalyzer:
             security_patterns=self._find_security_patterns(content),
             architecture_patterns=self._find_architecture_patterns(file_path, content),
             lines_of_code=len([line for line in content.split('\n') if line.strip()]),
-            technical_debt_indicators=self._find_tech_debt(content)
+            technical_debt_indicators=self._find_tech_debt(content),
+            content=content  # Store the original content
         )
     
     def _analyze_js_file(self, file_path: str, content: str, language: str) -> FileAnalysis:
@@ -232,7 +234,8 @@ class CodeAnalyzer:
             security_patterns=self._find_security_patterns(content),
             architecture_patterns=self._find_architecture_patterns(file_path, content),
             lines_of_code=len([line for line in content.split('\n') if line.strip()]),
-            technical_debt_indicators=self._find_tech_debt(content)
+            technical_debt_indicators=self._find_tech_debt(content),
+            content=content  # Store the original content
         )
     
     def _analyze_generic_file(self, file_path: str, content: str, language: str) -> FileAnalysis:
@@ -247,7 +250,8 @@ class CodeAnalyzer:
             security_patterns=self._find_security_patterns(content),
             architecture_patterns=self._find_architecture_patterns(file_path, content),
             lines_of_code=len([line for line in content.split('\n') if line.strip()]),
-            technical_debt_indicators=self._find_tech_debt(content)
+            technical_debt_indicators=self._find_tech_debt(content),
+            content=content  # Store the original content
         )
     
     def _calculate_complexity(self, node) -> int:

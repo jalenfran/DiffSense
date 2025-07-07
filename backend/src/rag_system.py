@@ -34,9 +34,10 @@ class QueryResult:
 class RAGSystem:
     """RAG with deep code understanding and intelligent context gathering"""
     
-    def __init__(self, git_analyzer, claude_analyzer=None):
+    def __init__(self, git_analyzer, claude_analyzer=None, embedding_engine=None):
         self.git_analyzer = git_analyzer
         self.claude_analyzer = claude_analyzer
+        self.embedding_engine = embedding_engine
         self.code_analyzer = CodeAnalyzer()
         # Initialize breaking change detector only if git_analyzer is available
         self.breaking_change_detector = None
@@ -44,6 +45,98 @@ class RAGSystem:
             self.breaking_change_detector = BreakingChangeDetector(git_analyzer, claude_analyzer)
         self.cached_analyses = {}  # Cache file analyses
         
+    def query(self, repo_id: str, query: str, max_results: int = 10) -> QueryResult:
+        """
+        Main query method that handles both general code questions and breaking change analysis
+        Uses semantic search, code analysis, and breaking change detection as needed
+        """
+        try:
+            # Step 1: Analyze query intent to determine approach
+            query_intent = self._analyze_query_intent(query)
+            
+            # Step 2: Check if this is a breaking change related query
+            is_breaking_change_query = (
+                query_intent.get('primary_domain') == 'breaking_changes' or
+                any(keyword in query.lower() for keyword in [
+                    'breaking', 'break', 'risk', 'danger', 'critical', 'migration', 
+                    'compatibility', 'change', 'impact', 'semantic drift'
+                ])
+            )
+            
+            # Step 3: Gather relevant context using semantic search
+            relevant_files = []
+            relevant_commits = []
+            
+            if self.git_analyzer:
+                # Use semantic search to find relevant files
+                relevant_files = self._gather_intelligent_context(repo_id, query, query_intent)
+                
+                # Get relevant commits based on query
+                relevant_commits = self._gather_intelligent_commits(repo_id, query, query_intent)
+            
+            # Step 4: Perform file analysis on relevant files - analyze ALL files for comprehensive context
+            file_analyses = self._analyze_relevant_files(relevant_files)  # Analyze ALL loaded files, not just a subset
+            
+            # Step 5: Breaking change analysis if relevant
+            breaking_change_analysis = None
+            if is_breaking_change_query and self.breaking_change_detector:
+                logger.info(f"🔍 Performing breaking change analysis for query: {query}")
+                breaking_change_analysis = self._analyze_breaking_changes(relevant_commits, file_analyses, query_intent)
+            
+            # Step 6: Create specialized analysis based on query type
+            specialized_analysis = self._create_specialized_analysis(query_intent, file_analyses, relevant_commits)
+            
+            # Step 7: Get smart context from code analyzer
+            smart_context = {}
+            if file_analyses:
+                smart_context = self.code_analyzer.get_smart_context_for_query(query, file_analyses)
+            
+            # Step 8: Intelligent curation for LLM - select most relevant context
+            curated_file_analyses = self._curate_files_for_llm(file_analyses, query_intent, query, max_llm_files=15)
+            curated_commits = self._curate_commits_for_llm(relevant_commits, query_intent, query, max_llm_commits=8)
+            
+            logger.info(f"🎯 Curated context: {len(curated_file_analyses)}/{len(file_analyses)} files, {len(curated_commits)}/{len(relevant_commits)} commits for LLM")
+            
+            # Step 9: Generate response with curated context
+            if self.claude_analyzer and self.claude_analyzer.available:
+                claude_response = self._enhanced_claude_analysis(
+                    query, query_intent, smart_context, specialized_analysis, 
+                    curated_file_analyses, breaking_change_analysis
+                )
+                
+                return QueryResult(
+                    query=query,
+                    response=claude_response['response'],
+                    confidence=claude_response['confidence'],
+                    sources=claude_response.get('sources', []),
+                    context_used=claude_response.get('context_used', []),
+                    suggestions=claude_response.get('suggestions', []),
+                    code_insights=smart_context.get('code_insights', {}),
+                    architecture_analysis=specialized_analysis.get('architecture'),
+                    security_analysis=specialized_analysis.get('security'),
+                    quality_metrics=specialized_analysis.get('quality'),
+                    breaking_change_analysis=breaking_change_analysis
+                )
+            else:
+                # Fallback response when Claude is not available
+                return self._create_fallback_response(query, smart_context, specialized_analysis, breaking_change_analysis)
+                
+        except Exception as e:
+            logger.error(f"Error in RAG query: {e}")
+            return QueryResult(
+                query=query,
+                response=f"I encountered an error while analyzing your query: {str(e)}",
+                confidence=0.0,
+                sources=[],
+                context_used=[],
+                suggestions=["Please try rephrasing your question", "Check if the repository is properly loaded"],
+                code_insights={},
+                architecture_analysis=None,
+                security_analysis=None,
+                quality_metrics=None,
+                breaking_change_analysis=None
+            )
+    
     def enhanced_query(self, repo_id: str, query: str, max_results: int = 10) -> QueryResult:
         """Enhanced query with deep code understanding"""
         
@@ -110,7 +203,9 @@ class RAGSystem:
             'technical_context': [],
             'specific_commit': None,
             'commit_query': False,
-            'time_context': None
+            'time_context': None,
+            'specific_files_mentioned': [],  # NEW: Track specific files mentioned
+            'file_focused_query': False      # NEW: Is this a file-specific query?
         }
         
         # Detect specific commit hash (7+ hex characters)
@@ -125,8 +220,7 @@ class RAGSystem:
         commit_keywords = ['commit', 'change', 'diff', 'modification', 'when', 'who changed', 'history']
         if any(keyword in query_lower for keyword in commit_keywords):
             intent['commit_query'] = True
-            if intent['primary_domain'] == 'general':
-                intent['primary_domain'] = 'commit_analysis'
+            # Don't set primary_domain here - let breaking changes take priority
         
         # Detect time-based contexts
         time_patterns = {
@@ -140,8 +234,9 @@ class RAGSystem:
                 intent['time_context'] = time_type
                 break
         
-        # Detect primary domain
+        # Detect primary domain (BREAKING CHANGES GETS PRIORITY)
         domain_keywords = {
+            'breaking_changes': ['breaking', 'breaking change', 'compatibility', 'backward', 'risk', 'impact', 'migration', 'signature', 'deprecated'],
             'security': ['security', 'vulnerability', 'auth', 'password', 'token', 'encrypt', 'ssl', 'tls', 'xss', 'injection'],
             'performance': ['performance', 'speed', 'optimization', 'bottleneck', 'memory', 'cpu', 'cache', 'latency'],
             'architecture': ['architecture', 'design', 'pattern', 'structure', 'layer', 'component', 'module', 'service'],
@@ -149,8 +244,7 @@ class RAGSystem:
             'testing': ['test', 'testing', 'coverage', 'unit', 'integration', 'mock', 'assert', 'spec'],
             'deployment': ['deploy', 'deployment', 'ci', 'cd', 'pipeline', 'docker', 'kubernetes', 'infrastructure'],
             'data': ['database', 'data', 'sql', 'nosql', 'schema', 'migration', 'query', 'orm'],
-            'api': ['api', 'endpoint', 'rest', 'graphql', 'swagger', 'openapi', 'microservice'],
-            'breaking_changes': ['breaking', 'breaking change', 'compatibility', 'backward', 'risk', 'impact', 'migration', 'signature', 'deprecated']
+            'api': ['api', 'endpoint', 'rest', 'graphql', 'swagger', 'openapi', 'microservice']
         }
         
         domain_scores = {}
@@ -159,10 +253,14 @@ class RAGSystem:
             if score > 0:
                 domain_scores[domain] = score
         
-        if domain_scores and intent['primary_domain'] != 'commit_analysis':
+        # Set primary domain based on highest score (breaking_changes gets priority if tied)
+        if domain_scores:
             intent['primary_domain'] = max(domain_scores, key=domain_scores.get)
             intent['secondary_domains'] = [domain for domain, score in domain_scores.items() 
                                          if score > 0 and domain != intent['primary_domain']]
+        elif intent['commit_query'] and intent['primary_domain'] == 'general':
+            # Only set commit_analysis if no specific domain was detected
+            intent['primary_domain'] = 'commit_analysis'
         
         # Detect complexity level
         if any(word in query_lower for word in ['simple', 'basic', 'overview', 'intro']):
@@ -183,6 +281,30 @@ class RAGSystem:
         for pattern in code_patterns:
             matches = re.findall(pattern, query)
             intent['entities_mentioned'].extend(matches)
+        
+        # Detect specific files mentioned in the query
+        file_patterns = [
+            r'(\w+\.\w+)',          # filename.ext
+            r'(\w+\.c|\.cpp|\.h|\.py|\.js|\.ts|\.java)',  # specific code file extensions
+            r'(src/\w+\.\w+)',      # src/filename.ext
+            r'(\w+/\w+\.\w+)',      # folder/filename.ext
+        ]
+        
+        for pattern in file_patterns:
+            matches = re.findall(pattern, query)
+            for match in matches:
+                # Clean up the match and add to specific files
+                if isinstance(match, tuple):
+                    match = match[0] if match[0] else match[1] if len(match) > 1 else ''
+                if match and '.' in match:
+                    intent['specific_files_mentioned'].append(match)
+        
+        # Check if this is a file-focused query
+        file_focused_keywords = ['file', 'about', 'in', 'analyze', 'tell me about', 'what is', 'explain', 'describe']
+        if (intent['specific_files_mentioned'] and 
+            any(keyword in query_lower for keyword in file_focused_keywords)):
+            intent['file_focused_query'] = True
+            logger.info(f"🎯 File-focused query detected! Files: {intent['specific_files_mentioned']}")
         
         return intent
     
@@ -207,10 +329,23 @@ class RAGSystem:
             # Sort and take top files
             scored_files.sort(key=lambda x: x[1], reverse=True)
             
-            # Load file contents for top files
-            for file_path, score in scored_files[:15]:  # Increased from previous limits
+            # Load file contents for MANY more files - we'll analyze them all then curate for LLM
+            logger.info(f"📊 Found {len(scored_files)} relevant files, analyzing top {min(200, len(scored_files))} for comprehensive context")
+            
+            for file_path, score in scored_files[:200]:  # Analyze up to 200 files for comprehensive coverage
                 try:
                     content = repo.head.commit.tree[file_path].data_stream.read().decode('utf-8', errors='ignore')
+                    
+                    # Skip very large files (>500KB) for performance
+                    if len(content) > 500000:
+                        logger.debug(f"Skipping large file {file_path}: {len(content)} bytes")
+                        continue
+                    
+                    # Skip binary-like files
+                    if len(content) > 0 and sum(1 for c in content[:1000] if ord(c) < 32 and c not in '\n\r\t') / len(content[:1000]) > 0.3:
+                        logger.debug(f"Skipping binary file {file_path}")
+                        continue
+                    
                     ext = os.path.splitext(file_path)[1].lower()
                     language = self.code_analyzer.supported_languages.get(ext, 'text')
                     
@@ -226,6 +361,7 @@ class RAGSystem:
                 except Exception as e:
                     logger.debug(f"Could not read file {file_path}: {e}")
             
+            logger.info(f"✅ Successfully loaded {len(relevant_files)} files for analysis")
             return relevant_files
             
         except Exception as e:
@@ -353,6 +489,7 @@ class RAGSystem:
                         'hash': specific_commit.hexsha,
                         'message': specific_commit.message.strip(),
                         'author': specific_commit.author.name,
+                        'author_email': specific_commit.author.email,
                         'date': specific_commit.committed_datetime.isoformat(),
                         'score': 100,  # Maximum score for specific commit
                         'intelligence_factors': ['specific_commit_requested'],
@@ -404,6 +541,7 @@ class RAGSystem:
                         'hash': commit.hexsha,
                         'message': commit.message.strip(),
                         'author': commit.author.name,
+                        'author_email': commit.author.email,
                         'date': commit.committed_datetime.isoformat(),
                         'score': score,
                         'intelligence_factors': self._get_commit_intelligence_factors(commit, intent),
@@ -702,6 +840,10 @@ class RAGSystem:
                             change_info = {
                                 'file': file_path,
                                 'commit': commit_data['hash'][:8],
+                                'commit_full': commit_data['hash'],
+                                'author': commit_data.get('author', 'Unknown Author'),
+                                'author_email': commit_data.get('author_email', ''),
+                                'date': commit_data.get('date', ''),
                                 'type': change.get('type', 'unknown'),
                                 'description': change.get('description', ''),
                                 'old_signature': change.get('old_signature', ''),
@@ -852,19 +994,75 @@ You are a senior security engineer analyzing a codebase. Provide expert-level se
 ## Security Issues Detected
 {chr(10).join(f"- {issue}" for issue in security_data.get('issues_found', [])[:10])}
 
-## Files Analyzed
+## Files with Security Concerns ({len([a for a in file_analyses if a.security_patterns])} out of {len(file_analyses)} total)
 """
 
-        for analysis in file_analyses[:5]:
-            if analysis.security_patterns:
-                prompt += f"""
-### 🔍 {analysis.file_path}
-- **Security Patterns**: {', '.join(analysis.security_patterns[:3])}
-- **Complexity**: {analysis.complexity_score:.1f}
-- **Tech Debt**: {', '.join(analysis.technical_debt_indicators[:2]) if analysis.technical_debt_indicators else 'None'}
+        security_files = [a for a in file_analyses if a.security_patterns]
+        other_files = [a for a in file_analyses if not a.security_patterns]
+        
+        # Show files with security issues first
+        for analysis in security_files[:5]:
+            prompt += f"""
+### 🔍 {analysis.file_path} ⚠️ SECURITY CONCERNS
+- **Security Patterns Found**: {', '.join(analysis.security_patterns[:5])}
+- **Complexity Score**: {analysis.complexity_score:.1f}/10
+- **Lines of Code**: {getattr(analysis, 'lines_of_code', 'unknown')}
+- **Tech Debt Indicators**: {len(analysis.technical_debt_indicators)} found
 
+**Key Security-Related Entities**:
+"""
+            for entity in analysis.entities[:3]:
+                entity_type = getattr(entity, 'type', 'unknown')
+                entity_name = getattr(entity, 'name', 'unnamed')
+                # Highlight security-related entities
+                if any(sec_keyword in entity_name.lower() for sec_keyword in ['auth', 'login', 'password', 'token', 'security', 'encrypt']):
+                    prompt += f"  🔐 {entity_type}: `{entity_name}` (SECURITY RELATED)\n"
+                else:
+                    prompt += f"  - {entity_type}: `{entity_name}`\n"
+            
+            # ADD ACTUAL FILE CONTENT FOR CLAUDE TO ANALYZE
+            if hasattr(analysis, 'content') and analysis.content:
+                # Truncate very long files but include substantial content
+                content = analysis.content
+                if len(content) > 3000:
+                    content = content[:3000] + f"\n... [File truncated - showing first 3000 chars of {len(analysis.content)} total chars] ..."
+                
+                prompt += f"""
+**FULL FILE CONTENT**:
 ```{analysis.language}
-{analysis.file_path.split('/')[-1]} content analysis...
+{content}
+```
+"""
+            elif hasattr(analysis, 'key_sections') and analysis.key_sections:
+                prompt += f"""
+**KEY CODE SECTIONS**:
+```{analysis.language}
+{analysis.key_sections[:2000]}
+```
+"""
+        
+        # Show other analyzed files as context
+        if other_files:
+            prompt += f"""
+### 📁 Additional Files Analyzed ({len(other_files)} files)
+"""
+            for analysis in other_files[:8]:  # Show more files with content
+                prompt += f"""
+#### 📄 {analysis.file_path}
+- **Language**: {analysis.language}, **Entities**: {len(analysis.entities)}, **Complexity**: {analysis.complexity_score:.1f}
+"""
+                # Include actual file content for better analysis
+                if hasattr(analysis, 'content') and analysis.content:
+                    content = analysis.content
+                    if len(content) > 2000:
+                        content = content[:2000] + f"\n... [File truncated - showing first 2000 chars of {len(analysis.content)} total] ..."
+                    
+                    prompt += f"""
+**FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== FILE: {analysis.file_path} =====
+{content}
+// ===== END OF FILE: {analysis.file_path} =====
 ```
 """
 
@@ -1036,6 +1234,71 @@ You are a senior software architect specializing in API compatibility and breaki
 ## Query
 {query}
 
+## 🎯 **IMPORTANT**: When answering about breaking changes, always include:
+- **📁 File Name**: The exact file where the change occurred
+- **🔧 Function/Method Name**: The specific function or method affected  
+- **💾 Commit Hash**: The commit that introduced the change
+- **👤 Author**: Who made the change
+- **📅 Date**: When the change was made
+
+## ⚠️ CRITICAL: SPECIFIC BREAKING CHANGES DETECTED
+
+⚠️ **ATTENTION: {bc_data.get('total_breaking_changes', 0)} BREAKING CHANGES FOUND** ⚠️
+
+The automated analysis has detected specific breaking changes that need your expert evaluation:
+"""
+
+        # Show ALL detected breaking changes prominently at the top
+        all_changes = []
+        all_changes.extend(bc_data.get('high_risk_changes', []))
+        all_changes.extend(bc_data.get('medium_risk_changes', []))
+        all_changes.extend(bc_data.get('low_risk_changes', []))
+        
+        if all_changes:
+            prompt += f"""
+### 🚨 SPECIFIC BREAKING CHANGES DETECTED ({len(all_changes)} Total):
+
+**📋 BREAKING CHANGES SUMMARY TABLE:**
+"""
+            # Create a detailed table of breaking changes
+            for i, change in enumerate(all_changes, 1):
+                risk_level = "🔴 HIGH RISK" if change in bc_data.get('high_risk_changes', []) else \
+                           "🟡 MEDIUM RISK" if change in bc_data.get('medium_risk_changes', []) else "🟢 LOW RISK"
+                
+                # Extract function name from description if available
+                function_name = "Unknown Function"
+                description = change.get('description', '')
+                if "function '" in description and "' was" in description:
+                    function_name = description.split("function '")[1].split("'")[0]
+                elif "method '" in description and "' was" in description:
+                    function_name = description.split("method '")[1].split("'")[0]
+                
+                prompt += f"""
+**CHANGE #{i} [{risk_level}]**
+┌─ 📁 **File**: `{change.get('file', 'unknown')}`
+├─ 🔧 **Function/Method**: `{function_name}`
+├─ 💾 **Commit**: `{change.get('commit', 'unknown')}` (Full: `{change.get('commit_full', 'unknown')}`)
+├─ 👤 **Author**: {change.get('author', 'Unknown Author')} <{change.get('author_email', 'no-email')}>
+├─ 📅 **Date**: {change.get('date', 'Unknown date')}
+├─ 📊 **Change Type**: {change.get('type', 'unknown_change').replace('_', ' ').title()}
+├─ 📝 **Description**: {change.get('description', 'No description available')}
+├─ 📈 **Confidence**: {change.get('confidence', 0.0):.0%}
+├─ 🔹 **Old Signature**: `{change.get('old_signature', 'Not captured')}`
+└─ 🔸 **New Signature**: `{change.get('new_signature', 'Not captured')}`
+
+"""
+        else:
+            prompt += """
+✅ **No breaking changes detected** - This is good news for API stability.
+"""
+
+        prompt += f"""
+
+## Analysis Scope & Context
+- **Total Files Analyzed**: {len(file_analyses)} files
+- **Repository Analysis Depth**: Comprehensive codebase scan
+- **Analysis Confidence**: High (based on {len(file_analyses)} file analyses)
+
 ## Breaking Changes Analysis Results
 - **Total Breaking Changes**: {bc_data.get('total_breaking_changes', 0)}
 - **High Risk Changes**: {len(bc_data.get('high_risk_changes', []))}
@@ -1066,7 +1329,63 @@ You are a senior software architect specializing in API compatibility and breaki
 """
         else:
             prompt += "✅ No high-risk breaking changes detected.\n"
+
+        # Add Medium and Low Risk Changes too
+        medium_risk_changes = bc_data.get('medium_risk_changes', [])
+        if medium_risk_changes:
+            prompt += f"""
+
+## Medium Risk Breaking Changes ({len(medium_risk_changes)} found)
+"""
+            for i, change in enumerate(medium_risk_changes[:5], 1):
+                prompt += f"""
+### {i}. {change.get('type', 'Unknown Change')} in {change.get('file', 'unknown')}
+- **Commit**: {change.get('commit', 'unknown')}
+- **Description**: {change.get('description', 'No description')}
+- **Impact**: {change.get('impact', 'Medium impact on users')}
+- **Confidence**: {change.get('confidence', 0.0):.0%}
+"""
+
+        low_risk_changes = bc_data.get('low_risk_changes', [])
+        if low_risk_changes:
+            prompt += f"""
+
+## Low Risk Breaking Changes ({len(low_risk_changes)} found)
+"""
+            for i, change in enumerate(low_risk_changes[:3], 1):
+                prompt += f"""
+### {i}. {change.get('type', 'Unknown Change')} in {change.get('file', 'unknown')}
+- **Commit**: {change.get('commit', 'unknown')}
+- **Description**: {change.get('description', 'No description')}
+"""
         
+        prompt += f"""
+
+## All Detected Breaking Changes Summary
+"""
+        all_changes = []
+        all_changes.extend(bc_data.get('high_risk_changes', []))
+        all_changes.extend(bc_data.get('medium_risk_changes', []))
+        all_changes.extend(bc_data.get('low_risk_changes', []))
+        
+        if all_changes:
+            prompt += f"""
+**Total Breaking Changes Found**: {len(all_changes)}
+
+### Complete Breaking Changes List:
+"""
+            for i, change in enumerate(all_changes[:15], 1):  # Show up to 15 total changes
+                risk_level = "HIGH" if change in bc_data.get('high_risk_changes', []) else \
+                           "MEDIUM" if change in bc_data.get('medium_risk_changes', []) else "LOW"
+                prompt += f"""
+{i}. **[{risk_level} RISK]** {change.get('type', 'Unknown Change')} in `{change.get('file', 'unknown')}`
+   - Commit: {change.get('commit', 'unknown')[:8]}...
+   - Change: {change.get('description', 'No description')[:100]}
+   - Confidence: {change.get('confidence', 0.0):.0%}
+"""
+        else:
+            prompt += "✅ **No breaking changes detected** in the analyzed commits.\n"
+
         prompt += f"""
 
 ## Intent Patterns Analysis
@@ -1099,14 +1418,72 @@ You are a senior software architect specializing in API compatibility and breaki
         
         prompt += f"""
 
-## Files Analyzed
+## Files Analyzed ({len(file_analyses)} total files)
 """
-        for analysis in file_analyses[:10]:
+        for analysis in file_analyses[:10]:  # Show detailed analysis for top files WITH CONTENT
             prompt += f"""
-### {analysis.file_path}
+### 📁 {analysis.file_path}
 - **Language**: {analysis.language}
-- **Complexity**: {analysis.complexity_score:.1f}
-- **Entities**: {len(analysis.entities)} (classes/functions)
+- **Complexity Score**: {analysis.complexity_score:.1f}/10
+- **Lines of Code**: {getattr(analysis, 'lines_of_code', 'unknown')}
+- **Functions/Classes**: {len(analysis.entities)} entities
+- **Architecture Patterns**: {', '.join(analysis.architecture_patterns) if analysis.architecture_patterns else 'Standard structure'}
+- **Security Concerns**: {len(analysis.security_patterns)} issues found
+- **Technical Debt**: {len(analysis.technical_debt_indicators)} indicators
+
+**Key Entities**:
+"""
+            # Show key entities (functions, classes) found in the file
+            for entity in analysis.entities[:5]:  # Top 5 entities
+                entity_type = getattr(entity, 'type', 'unknown')
+                entity_name = getattr(entity, 'name', 'unnamed')
+                prompt += f"  - {entity_type}: `{entity_name}`\n"
+            
+            # ADD FULL FILE CONTENT FOR CLAUDE'S BREAKING CHANGE ANALYSIS WITH CLEAR HEADERS
+            if hasattr(analysis, 'content') and analysis.content:
+                content = analysis.content
+                if len(content) > 4000:  # Allow more content for breaking change analysis
+                    content = content[:4000] + f"\n... [File truncated - showing first 4000 chars of {len(analysis.content)} total] ..."
+                
+                prompt += f"""
+**COMPLETE FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== FILE: {analysis.file_path} =====
+{content}
+// ===== END OF FILE: {analysis.file_path} =====
+```
+"""
+            elif hasattr(analysis, 'content_summary') and analysis.content_summary:
+                prompt += f"""
+**Content Summary**: {analysis.content_summary[:200]}...
+"""
+            elif len(analysis.entities) > 0:
+                prompt += f"**Primary Focus**: Contains {analysis.entities[0].get('type', 'code')} definitions and related functionality\n"
+        
+        # Show summary of remaining files
+        if len(file_analyses) > 10:
+            remaining_count = len(file_analyses) - 10
+            prompt += f"""
+### 📋 Additional Files Analyzed ({remaining_count} more)
+"""
+            for analysis in file_analyses[10:]:
+                prompt += f"""
+#### 📄 {analysis.file_path}
+- **Language**: {analysis.language}, **Complexity**: {analysis.complexity_score:.1f}
+"""
+                # Include shorter content excerpts for remaining files
+                if hasattr(analysis, 'content') and analysis.content:
+                    content = analysis.content
+                    if len(content) > 1000:
+                        content = content[:1000] + f"\n... [Truncated] ..."
+                    
+                    prompt += f"""
+**FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== FILE: {analysis.file_path} =====
+{content}
+// ===== END OF FILE: {analysis.file_path} =====
+```
 """
 
         prompt += f"""
@@ -1134,6 +1511,10 @@ Provide specific, actionable recommendations for managing these breaking changes
                                     breaking_change_analysis: Optional[Dict[str, Any]] = None) -> str:
         """Create general expert prompt"""
         
+        # Check if this is a file-focused query
+        file_focused = intent.get('file_focused_query', False)
+        specific_files = intent.get('specific_files_mentioned', [])
+        
         prompt = f"""# 💻 Senior Software Engineer Analysis
 
 You are a senior software engineer providing comprehensive code analysis and recommendations.
@@ -1141,10 +1522,24 @@ You are a senior software engineer providing comprehensive code analysis and rec
 ## Query
 {query}
 
+## 🎯 **IMPORTANT INSTRUCTIONS**: 
+- **Direct Questions**: If the query asks about a specific file (e.g., "tell me about executor.c"), focus your analysis PRIMARILY on that file
+- **Specific Focus**: Answer the specific question asked, using other files only for supporting context
+- **File Content**: Use the actual file content provided below to give detailed, accurate answers
+
 ## Analysis Context
 - **Primary Domain**: {intent['primary_domain']}
 - **Files Analyzed**: {len(file_analyses)}
-- **Analysis Confidence**: {smart_context.get('confidence', 0.5):.0%}
+- **Analysis Confidence**: {smart_context.get('confidence', 0.5):.0%}"""
+
+        # Add file-focused context if applicable
+        if file_focused and specific_files:
+            prompt += f"""
+- **🎯 FILE-FOCUSED QUERY**: Yes - Focus analysis on the requested files
+- **📁 Specific Files Requested**: {', '.join(specific_files)}
+- **📋 Analysis Type**: Detailed analysis of specifically requested files with supporting context"""
+        
+        prompt += """
 
 ## Code Insights
 """
@@ -1154,14 +1549,147 @@ You are a senior software engineer providing comprehensive code analysis and rec
         if code_insights:
             prompt += f"- **Code Quality**: {json.dumps(code_insights, indent=2)}\n"
 
-        # Add file summaries
-        for analysis in file_analyses[:3]:
+        # Handle file-focused queries differently
+        if file_focused and specific_files:
+            # For file-focused queries, prioritize mentioned files
+            mentioned_analyses = []
+            other_analyses = []
+            
+            for analysis in file_analyses:
+                filename = os.path.basename(analysis.file_path)
+                if any(sf.lower() in filename.lower() or filename.lower() in sf.lower() for sf in specific_files):
+                    mentioned_analyses.append(analysis)
+                else:
+                    other_analyses.append(analysis)
+            
             prompt += f"""
-### 📁 {analysis.file_path}
+
+## 🎯 PRIMARY FOCUS: Requested Files Analysis
+**Note**: The user specifically asked about these files. Provide detailed analysis focusing primarily on these files:
+"""
+            
+            # Show mentioned files first with full detail
+            for analysis in mentioned_analyses:
+                prompt += f"""
+### 🔍 PRIMARY: {analysis.file_path}
 - **Language**: {analysis.language}
-- **Complexity**: {analysis.complexity_score:.1f}
-- **Entities**: {len(analysis.entities)} (classes/functions)
-- **Architecture Patterns**: {', '.join(analysis.architecture_patterns) if analysis.architecture_patterns else 'None'}
+- **Complexity Score**: {analysis.complexity_score:.1f}/10
+- **Lines of Code**: {getattr(analysis, 'lines_of_code', 'unknown')}
+- **Architecture Patterns**: {', '.join(analysis.architecture_patterns) if analysis.architecture_patterns else 'Standard structure'}
+- **Security Patterns**: {len(analysis.security_patterns)} found
+- **Technical Debt Indicators**: {len(analysis.technical_debt_indicators)} found
+
+**Key Entities Found**:
+"""
+                for entity in analysis.entities[:5]:  # Show more entities for requested files
+                    entity_type = getattr(entity, 'type', 'unknown')
+                    entity_name = getattr(entity, 'name', 'unnamed')
+                    entity_line = getattr(entity, 'line_number', 'unknown')
+                    prompt += f"  - {entity_type}: `{entity_name}` (line {entity_line})\n"
+                
+                # ADD FULL FILE CONTENT FOR REQUESTED FILES
+                if hasattr(analysis, 'content') and analysis.content:
+                    content = analysis.content
+                    if len(content) > 4000:  # More content for requested files
+                        content = content[:4000] + f"\n... [File truncated - showing first 4000 chars of {len(analysis.content)} total] ..."
+                    
+                    prompt += f"""
+**COMPLETE FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== REQUESTED FILE: {analysis.file_path} =====
+{content}
+// ===== END OF REQUESTED FILE: {analysis.file_path} =====
+```
+"""
+            
+            # Show other files for context if any
+            if other_analyses:
+                prompt += f"""
+
+## 📁 Additional Context Files ({len(other_analyses)} files for reference)
+"""
+                for analysis in other_analyses[:4]:  # Fewer context files
+                    prompt += f"""
+### 📄 {analysis.file_path}
+- **Language**: {analysis.language}, **Entities**: {len(analysis.entities)} entities, **Complexity**: {analysis.complexity_score:.1f}/10
+"""
+                    # Shorter content for context files
+                    if hasattr(analysis, 'content') and analysis.content:
+                        content = analysis.content
+                        if len(content) > 1000:
+                            content = content[:1000] + f"\n... [File truncated for context] ..."
+                        
+                        prompt += f"""
+**CONTEXT FILE CONTENT**:
+```{analysis.language}
+// ===== CONTEXT FILE: {analysis.file_path} =====
+{content}
+// ===== END CONTEXT FILE =====
+```
+"""
+        else:
+            # Standard analysis for non-file-focused queries
+            prompt += f"""
+
+## 📁 Detailed File Analysis ({len(file_analyses)} files analyzed)
+"""
+            for analysis in file_analyses[:8]:  # Show top 8 files in detail with FULL CONTENT
+                prompt += f"""
+### {analysis.file_path}
+- **Language**: {analysis.language}
+- **Complexity Score**: {analysis.complexity_score:.1f}/10
+- **Lines of Code**: {getattr(analysis, 'lines_of_code', 'unknown')}
+- **Architecture Patterns**: {', '.join(analysis.architecture_patterns) if analysis.architecture_patterns else 'Standard structure'}
+- **Security Patterns**: {len(analysis.security_patterns)} found
+- **Technical Debt Indicators**: {len(analysis.technical_debt_indicators)} found
+
+**Key Entities Found**:
+"""
+            for entity in analysis.entities[:3]:  # Show top 3 entities
+                entity_type = getattr(entity, 'type', 'unknown')
+                entity_name = getattr(entity, 'name', 'unnamed')
+                entity_line = getattr(entity, 'line_number', 'unknown')
+                prompt += f"  - {entity_type}: `{entity_name}` (line {entity_line})\n"
+            
+            # ADD FULL FILE CONTENT FOR CLAUDE TO ANALYZE WITH CLEAR HEADERS
+            if hasattr(analysis, 'content') and analysis.content:
+                content = analysis.content
+                if len(content) > 3000:
+                    content = content[:3000] + f"\n... [File truncated - showing first 3000 chars of {len(analysis.content)} total] ..."
+                
+                prompt += f"""
+**COMPLETE FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== FILE: {analysis.file_path} =====
+{content}
+// ===== END OF FILE: {analysis.file_path} =====
+```
+"""
+        
+        # Summary of additional files
+        if len(file_analyses) > 8:
+            remaining_files = file_analyses[8:]
+            prompt += f"""
+### Additional Files ({len(remaining_files)} more)
+"""
+            for analysis in remaining_files:
+                prompt += f"""
+#### 📄 {analysis.file_path}
+- **Language**: {analysis.language}, **Entities**: {len(analysis.entities)} entities
+"""
+                # Include content for remaining files too (shorter excerpts)
+                if hasattr(analysis, 'content') and analysis.content:
+                    content = analysis.content
+                    if len(content) > 1500:
+                        content = content[:1500] + f"\n... [File truncated - showing first 1500 chars] ..."
+                    
+                    prompt += f"""
+**FILE CONTENT FROM: {analysis.file_path}**:
+```{analysis.language}
+// ===== FILE: {analysis.file_path} =====
+{content}
+// ===== END OF FILE: {analysis.file_path} =====
+```
 """
 
         prompt += f"""
@@ -1509,4 +2037,240 @@ Focus on practical, business-value driven recommendations that improve the codeb
             recommendations.append("Regular code reviews and testing are recommended")
         
         return recommendations[:5]  # Limit to 5 recommendations
+
+    def _curate_files_for_llm(self, file_analyses: List[FileAnalysis], query_intent: Dict[str, Any], 
+                              query: str, max_llm_files: int = 15) -> List[FileAnalysis]:
+        """Intelligently curate the most relevant files for LLM analysis"""
+        if not file_analyses:
+            return []
+        
+        # If this is a file-focused query, prioritize mentioned files
+        if query_intent.get('file_focused_query') and query_intent.get('specific_files_mentioned'):
+            prioritized_files = []
+            remaining_files = []
+            
+            mentioned_files = query_intent['specific_files_mentioned']
+            logger.info(f"🎯 Prioritizing specifically mentioned files: {mentioned_files}")
+            
+            # First, find files that match the mentioned files
+            for file_analysis in file_analyses:
+                file_name = os.path.basename(file_analysis.file_path)
+                file_path_lower = file_analysis.file_path.lower()
+                
+                # Check if this file matches any mentioned file
+                is_mentioned = False
+                for mentioned_file in mentioned_files:
+                    mentioned_lower = mentioned_file.lower()
+                    if (mentioned_lower in file_name.lower() or 
+                        mentioned_lower in file_path_lower or
+                        file_name.lower() in mentioned_lower):
+                        is_mentioned = True
+                        break
+                
+                if is_mentioned:
+                    prioritized_files.append(file_analysis)
+                    logger.info(f"✅ Prioritized file: {file_analysis.file_path}")
+                else:
+                    remaining_files.append(file_analysis)
+            
+            # If we found the specific files, use them first and fill remaining slots
+            if prioritized_files:
+                # Start with prioritized files
+                curated_files = prioritized_files[:max_llm_files]
+                remaining_slots = max_llm_files - len(curated_files)
+                
+                # Add some context files if we have remaining slots
+                if remaining_slots > 0:
+                    # Score and sort remaining files
+                    scored_remaining = []
+                    for file_analysis in remaining_files:
+                        score = self._calculate_file_llm_score(file_analysis, query_intent, query)
+                        scored_remaining.append((file_analysis, score))
+                    
+                    scored_remaining.sort(key=lambda x: x[1], reverse=True)
+                    curated_files.extend([f[0] for f in scored_remaining[:remaining_slots]])
+                
+                logger.info(f"🎯 File curation: Selected {len(prioritized_files)} prioritized + {len(curated_files) - len(prioritized_files)} context files")
+                return curated_files
+        
+        # Regular curation logic for non-file-focused queries
+        if len(file_analyses) <= max_llm_files:
+            return file_analyses
+        
+        # Score files for LLM relevance
+        scored_files = []
+        
+        for file_analysis in file_analyses:
+            score = self._calculate_file_llm_score(file_analysis, query_intent, query)
+            scored_files.append((file_analysis, score))
+        
+        # Sort by score and take top files
+        scored_files.sort(key=lambda x: x[1], reverse=True)
+        
+        # Ensure we include diverse file types
+        curated_files = []
+        file_types_included = set()
+        
+        # First pass: include highest scoring files with type diversity
+        for file_analysis, score in scored_files:
+            if len(curated_files) >= max_llm_files:
+                break
+                
+            file_ext = os.path.splitext(file_analysis.file_path)[1].lower()
+            
+            # Always include top 5 regardless of type
+            if len(curated_files) < 5:
+                curated_files.append(file_analysis)
+                file_types_included.add(file_ext)
+            # Then include diverse types
+            elif file_ext not in file_types_included or len(file_types_included) < 3:
+                curated_files.append(file_analysis)
+                file_types_included.add(file_ext)
+            # Fill remaining slots with highest scores
+            elif score > 15:  # Only include if significantly relevant
+                curated_files.append(file_analysis)
+        
+        logger.info(f"🎯 File curation: Selected {len(curated_files)}/{len(file_analyses)} files for LLM analysis")
+        logger.debug(f"Selected files: {[f.file_path for f in curated_files]}")
+        
+        return curated_files
     
+    def _calculate_file_llm_score(self, file_analysis: FileAnalysis, query_intent: Dict[str, Any], query: str) -> float:
+        """Calculate LLM relevance score for a file"""
+        score = 0.0
+        
+        # Base relevance score (already calculated during analysis)
+        score += getattr(file_analysis, 'relevance_score', 0.0) * 30
+        
+        # Query-specific scoring
+        query_lower = query.lower()
+        file_path_lower = file_analysis.file_path.lower()
+        
+        # Direct mentions in query
+        if any(keyword in file_path_lower for keyword in query_intent.get('keywords', [])):
+            score += 25
+        
+        # Domain-specific relevance
+        domain = query_intent.get('primary_domain', 'general')
+        if domain == 'security' and file_analysis.security_patterns:
+            score += 30
+        elif domain == 'architecture' and file_analysis.architecture_patterns:
+            score += 25
+        elif domain == 'quality' and file_analysis.technical_debt_indicators:
+            score += 20
+        elif domain == 'performance' and file_analysis.complexity_score > 3:
+            score += 20
+        
+        # File importance factors
+        file_name = os.path.basename(file_path_lower)
+        if any(name in file_name for name in ['main', 'index', 'app', 'server', 'config']):
+            score += 15
+        
+        # Complexity and content richness
+        score += min(file_analysis.complexity_score * 2, 10)  # Cap at 10
+        score += min(len(file_analysis.entities) * 0.5, 8)     # Cap at 8
+        
+        # File size factor (prefer moderately sized files)
+        lines_of_code = getattr(file_analysis, 'lines_of_code', 0)
+        if 50 <= lines_of_code <= 500:
+            score += 5
+        elif lines_of_code > 1000:
+            score -= 5  # Penalize very large files
+        
+        return score
+    
+    def _curate_commits_for_llm(self, commits: List[Dict[str, Any]], query_intent: Dict[str, Any], 
+                                query: str, max_llm_commits: int = 8) -> List[Dict[str, Any]]:
+        """Intelligently curate the most relevant commits for LLM analysis"""
+        if not commits:
+            return []
+        
+        if len(commits) <= max_llm_commits:
+            return commits
+        
+        # Score commits for LLM relevance
+        scored_commits = []
+        
+        for commit in commits:
+            score = commit.get('score', 0.0)  # Base score from commit analysis
+            
+            # Query-specific relevance
+            message_lower = commit.get('message', '').lower()
+            query_lower = query.lower()
+            
+            # Direct keyword matches
+            for keyword in query_intent.get('keywords', []):
+                if keyword in message_lower:
+                    score += 10
+            
+            # Domain-specific scoring
+            domain = query_intent.get('primary_domain', 'general')
+            domain_keywords = {
+                'security': ['security', 'auth', 'vulnerability', 'fix', 'patch'],
+                'performance': ['performance', 'optimization', 'speed', 'cache'],
+                'architecture': ['refactor', 'architecture', 'design', 'structure'],
+                'quality': ['cleanup', 'refactor', 'improve', 'quality'],
+                'breaking_changes': ['breaking', 'change', 'api', 'signature', 'deprecated']
+            }
+            
+            
+            if domain in domain_keywords:
+                for keyword in domain_keywords[domain]:
+                    if keyword in message_lower:
+                        score += 8
+            
+            # Recency boost
+            try:
+                commit_date = commit.get('date', '')
+                if commit_date:
+                    from datetime import datetime, timezone
+                    commit_datetime = datetime.fromisoformat(commit_date.replace('Z', '+00:00'))
+                    days_ago = (datetime.now(timezone.utc) - commit_datetime).days
+                    if days_ago < 7:
+                        score += 10
+                    elif days_ago < 30:
+                        score += 5
+            except:
+                pass
+            
+            # Files changed factor
+            files_changed = len(commit.get('files_changed', []))
+            if 1 <= files_changed <= 5:
+                score += 5  # Focused changes
+            elif files_changed > 20:
+                score -= 3  # Very large changes may be less focused
+            
+            # Important change indicators
+            if any(word in message_lower for word in ['fix', 'bug', 'critical', 'important', 'breaking']):
+                score += 8
+            
+            scored_commits.append((commit, score))
+        
+        # Sort by score and take top commits
+        scored_commits.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select diverse commits (not all from same author/time period)
+        curated_commits = []
+        authors_included = set()
+        
+        for commit, score in scored_commits:
+            if len(curated_commits) >= max_llm_commits:
+                break
+                
+            author = commit.get('author', 'unknown')
+            
+            # Always include top 3 regardless of author
+            if len(curated_commits) < 3:
+                curated_commits.append(commit)
+                authors_included.add(author)
+            # Then ensure author diversity
+            elif author not in authors_included or len(authors_included) < 3:
+                curated_commits.append(commit)
+                authors_included.add(author)
+            # Fill remaining with highest scores
+            elif score > 10:  # Only include if significantly relevant
+                curated_commits.append(commit)
+        
+        logger.info(f"🎯 Commit curation: Selected {len(curated_commits)}/{len(commits)} commits for LLM analysis")
+        
+        return curated_commits
